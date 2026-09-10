@@ -85,9 +85,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 ## 许可与上游
 
 - 本仓库使用 Apache-2.0（见 LICENSE）；
-- 配套 Codex fork（分支 `codex-fork`）源自
-  [openai/codex](https://github.com/openai/codex)（Apache-2.0），保留其
-  README/许可与 upstream 关系；
+- 配套 Codex fork 源自 [openai/codex](https://github.com/openai/codex)
+  （Apache-2.0），保留其 README/许可与 upstream 关系；fork 的本地实验
+  改动（内嵌 Experience Gate 等）当前保存在本地仓库，如需可另行发布分支；
 - 本仓库中的经验核心（store/state/runtime 等）部分由该 fork 提炼而来，
   对外以本仓库为准。
 
