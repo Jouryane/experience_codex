@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "create_probe_a",
+      "trigger": {
+        "tool": "exec_command",
+        "command_pattern": "create probe file"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "write_file",
+          "args": {
+            "path": "probe.txt",
+            "content": "A"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:probe.txt.exists",
+          "expected": true
+        }
+      ],
+      "verification": [],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ],
+  "pinned": [],
+  "scopes": {
+    "create_probe_a": "scene-a"
+  },
+  "display_names": {
+    "create_probe_a": "A 场景探针经验"
+  },
+  "user_usage": {
+    "create_probe_a": "deny"
+  },
+  "user_confidence": {
+    "create_probe_a": 0.9
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "sessions": [
+    {
+      "id": "s-l3-fixture",
+      "agent_id": "codex",
+      "task": "create probe file in the current directory: write probe.txt whose content is exactly EXPERIENCE_GATE_SUCCESS using exec_command, verify, then stop.",
+      "cwd": "D:\\workspace\\l3-execute",
+      "thread_id": "thread-l3-fixture",
+      "trace": [
+        {
+          "kind": "delegate",
+          "agent": "codex",
+          "task_summary": "create probe file in the current directory: write probe.txt whose content is exactly EXPERIENCE_GATE_SUCCESS using exec_command, verify, then stop. [plan: create_probe_file]",
+          "plan": [
+            "create_probe_file"
+          ]
+        },
+        {
+          "kind": "submitted"
+        },
+        {
+          "kind": "accepted"
+        },
+        {
+          "kind": "agentStarted"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "call_id": "call_fixture_1"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution",
+          "call_id": "call_fixture_1"
+        },
+        {
+          "kind": "turnCompleted"
+        }
+      ],
+      "round_tasks": [
+        "create probe file in the current directory: write probe.txt whose content is exactly EXPERIENCE_GATE_SUCCESS using exec_command, verify, then stop."
+      ],
+      "status": "completed",
+      "created_at": 1,
+      "finished_at": 2,
+      "summary": "session completed",
+      "output": ""
+    }
+  ]
+}

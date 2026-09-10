@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "cand_accept_baseline",
+      "trigger": {
+        "tool": "exec_command",
+        "command_pattern": null
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "exec_command",
+          "args": {
+            "cmd": "Set-Content accept-l1.txt L1_SINK_COLD_OK"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "candidate.pending_validation",
+          "expected": true
+        }
+      ],
+      "verification": [],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "candidate"
+    }
+  ]
+}
