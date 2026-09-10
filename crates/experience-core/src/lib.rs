@@ -1,0 +1,9 @@
+//! Experience core — pure logic distilled from codex-main (Apache-2.0).
+//!
+//! This crate is runtime-agnostic: Experience State, matching, decision,
+//! learner, lifecycle, confidence, store and process log. Controller and
+//! agent adapters live in sibling crates.
+
+pub mod experience;
+pub mod domain;
+pub mod store;

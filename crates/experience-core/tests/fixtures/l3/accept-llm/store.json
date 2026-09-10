@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "create_seq_a_d_files",
+      "trigger": {
+        "tool": "exec_command",
+        "command_pattern": "Set-Content -LiteralPath seq-a.txt -Value A"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "exec_command",
+          "args": {
+            "cmd": "Set-Content -LiteralPath seq-a.txt -Value A"
+          }
+        },
+        {
+          "action": "exec_command",
+          "args": {
+            "cmd": "Set-Content -LiteralPath seq-b.txt -Value B"
+          }
+        },
+        {
+          "action": "exec_command",
+          "args": {
+            "cmd": "Set-Content -LiteralPath seq-c.txt -Value C"
+          }
+        },
+        {
+          "action": "exec_command",
+          "args": {
+            "cmd": "Set-Content -LiteralPath seq-d.txt -Value D"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:seq-a.txt.content",
+          "expected": "A"
+        },
+        {
+          "key": "file:seq-d.txt.content",
+          "expected": "D"
+        }
+      ],
+      "verification": [],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "candidate"
+    }
+  ],
+  "pinned": []
+}

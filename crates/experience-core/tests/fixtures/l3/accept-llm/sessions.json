@@ -1,0 +1,79 @@
+{
+  "schema_version": 2,
+  "sessions": [
+    {
+      "id": "s-l3-llm-fixture",
+      "agent_id": "codex",
+      "task": "create seq-a/b/c/d files in sequence then read back seq-d",
+      "cwd": "D:\\workspace\\l3-llm",
+      "thread_id": "thread-l3-llm-fixture",
+      "trace": [
+        {
+          "kind": "submitted"
+        },
+        {
+          "kind": "accepted"
+        },
+        {
+          "kind": "agentStarted"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "args_summary": "Set-Content -LiteralPath seq-a.txt -Value A"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "args_summary": "Set-Content -LiteralPath seq-b.txt -Value B"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "args_summary": "Set-Content -LiteralPath seq-c.txt -Value C"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "args_summary": "Set-Content -LiteralPath seq-d.txt -Value D"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution"
+        },
+        {
+          "kind": "toolCall",
+          "name": "commandExecution",
+          "args_summary": "Get-Content -LiteralPath seq-d.txt"
+        },
+        {
+          "kind": "toolResult",
+          "name": "commandExecution"
+        },
+        {
+          "kind": "turnCompleted"
+        }
+      ],
+      "round_tasks": [
+        "create seq-a/b/c/d files in sequence then read back seq-d"
+      ],
+      "status": "completed",
+      "created_at": 1,
+      "finished_at": 2,
+      "summary": "session completed",
+      "output": ""
+    }
+  ]
+}
