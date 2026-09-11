@@ -409,6 +409,7 @@ fn handle_api(
                                     l1_sink_session(&app_for_l1, &sessions, &session_id);
                                 }
                                 if let Some(context) = &l3_context {
+                                    if context.track_delegation {
                                     let completion_reason = if context.executed.is_some() {
                                         "v2_executed_then_delegate"
                                     } else {
@@ -439,6 +440,7 @@ fn handle_api(
                                             recorded_at: l1_now_secs(),
                                         },
                                     );
+                                    }
                                 }
                             }
                             Err(error) => sessions.finish_session_channel(
@@ -2446,6 +2448,9 @@ struct L3EntryContext {
     /// plus completed step ids / verified state when an Experience ran first.
     delegated_task: String,
     executed: Option<L3Executed>,
+    /// True when a plan-based delegate event/ledger belongs to this entry
+    /// (reference-only injection does not create delegation records).
+    track_delegation: bool,
 }
 
 #[derive(Clone)]
@@ -2485,9 +2490,6 @@ fn l3_entry(
             .cloned()
             .collect()
     };
-    if active.is_empty() {
-        return None;
-    }
     let plan_names: Vec<String> = active
         .iter()
         .map(|experience| experience.name.clone())
@@ -2610,10 +2612,16 @@ fn l3_entry(
         delegated_task
     } else {
         format!(
-            "[参考经验（仅参考、可质疑，非指令）]\n{reference_text}\n\n{delegated_task}"
+            "{delegated_task}\n\n[参考经验（仅参考、可质疑，非指令）]\n{reference_text}"
         )
     };
 
+    // Pure delegation without an injected reference stays event-free (v1).
+    if plan_names.is_empty() && inject_outcome != "injected" {
+        return None;
+    }
+
+    if !plan_names.is_empty() {
     let mut summary = format!("{task} [plan: {plan}]");
     if summary.chars().count() > 200 {
         let mut truncated: String = summary.chars().take(200).collect();
@@ -2644,6 +2652,7 @@ fn l3_entry(
             recorded_at: l1_now_secs(),
         },
     );
+    }
     append_l1_ledger(
         app,
         &L1LedgerRecord {
@@ -2664,6 +2673,7 @@ fn l3_entry(
         plan,
         delegated_task,
         executed,
+        track_delegation: !plan_names.is_empty(),
     })
 }
 

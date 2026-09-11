@@ -65,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 
 - 学习与资格链（L1/L2）、外层委派闭环（L3）、内层 Gate 接管（L4/M5）
   均已通过真机验收；
+- **预设经验 12 场景真机全部 PASS**（全自动 3 / 半自动 3 / 仅参考 3 /
+  中间流程 3，见 docs/preset-scenes.md）；
 - 当前重点：**规模与使用**——经验树/场景管理、编辑与个性化、外部 Agent
   材料吸收、UI 专项改造；
 - 明确边界：不做多 Agent 自适配，不默认引入向量检索，不自动激活经验。
