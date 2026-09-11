@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>经验吸收 — Experience</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/pages/absorb.css">
+</head>
+<body>
+<div class="app-layout">
+  <aside class="app-sidebar">
+    <div class="app-brand">Experience</div>
+    <nav class="app-nav">
+      <a href="index.html" class="nav-item" data-nav="sessions">
+        <span class="nav-icon">▸</span> 任务
+      </a>
+      <a href="experiences.html" class="nav-item" data-nav="experiences">
+        <span class="nav-icon">◇</span> 经验库
+      </a>
+      <a href="absorb.html" class="nav-item active" data-nav="absorb">
+        <span class="nav-icon">◈</span> 经验吸收
+      </a>
+      <a href="agents.html" class="nav-item" data-nav="agents">
+        <span class="nav-icon">◯</span> 助手
+      </a>
+      <a href="audit.html" class="nav-item" data-nav="audit">
+        <span class="nav-icon">▢</span> 操作记录
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span id="health" class="health-dot"></span>
+      <span id="health-text" class="text-sm text-muted">检查中…</span>
+    </div>
+  </aside>
+
+  <main class="app-main">
+    <div class="page-header">
+      <h1>经验吸收</h1>
+      <button class="btn btn-sm" id="refresh-all">刷新</button>
+    </div>
+
+    <div class="absorb-tabs">
+      <button class="absorb-tab active" data-tab="guide">采集指南</button>
+      <button class="absorb-tab" data-tab="submit">提交材料</button>
+      <button class="absorb-tab" data-tab="refs">参考列表</button>
+    </div>
+
+    <!-- Tab 1: 采集指南 -->
+    <div class="absorb-panel active" id="tab-guide">
+      <div class="guide-section">
+        <h3>采集清单</h3>
+        <p class="text-muted text-sm mb-3">在受控工作区中运行助手完成任务后，按以下步骤采集材料。</p>
+        <ol class="checklist" id="checklist"></ol>
+      </div>
+
+      <div class="guide-section">
+        <h3>工作区操作步骤</h3>
+        <ol class="workspace-steps" id="workspace-steps"></ol>
+      </div>
+
+      <div class="guide-section">
+        <div class="guide-section-header">
+          <h3>助手提示词模板</h3>
+          <button class="btn btn-sm" id="copy-prompt">复制模板</button>
+        </div>
+        <p class="text-muted text-sm mb-3">把这个模板发给助手，让它完成任务后产出结构化的 run-notes。</p>
+        <pre class="prompt-box" id="prompt-template"></pre>
+      </div>
+
+      <div class="guide-section">
+        <h3>信任级别说明</h3>
+        <div class="trust-explain">
+          <div class="trust-item">
+            <span class="badge badge-success">工作区验证</span>
+            <span class="text-sm">材料包含 git diff 或已验证文件，可信度较高</span>
+          </div>
+          <div class="trust-item">
+            <span class="badge badge-warning">自行声明</span>
+            <span class="text-sm">材料仅来自助手自述，无独立证据，仅供参考</span>
+          </div>
+        </div>
+        <p class="text-muted text-sm mt-3">参考经验永不直接执行，仅在注入策略开启时作为"仅参考、可质疑"的上下文注入。</p>
+      </div>
+    </div>
+
+    <!-- Tab 2: 提交材料 -->
+    <div class="absorb-panel" id="tab-submit">
+      <!-- 步骤 1：上传/粘贴 -->
+      <div class="submit-step" id="step-input">
+        <div class="upload-area" id="upload-area">
+          <div class="upload-icon">📄</div>
+          <p>拖拽 run-notes.md 文件到此处，或 <button class="btn btn-sm" id="choose-file">选择文件</button></p>
+          <input type="file" id="file-input" accept=".md,.txt" class="hidden">
+          <p class="text-muted text-sm mt-2">支持 .md / .txt 格式</p>
+        </div>
+
+        <div class="form-row mt-4">
+          <label>或直接粘贴 run-notes 内容</label>
+          <textarea id="submit-markdown" rows="10" placeholder="把助手产出的 run-notes.md 内容粘贴到这里…"></textarea>
+        </div>
+
+        <div class="form-row form-row-2col">
+          <div>
+            <label>来源助手</label>
+            <input type="text" id="submit-agent" value="trae">
+          </div>
+          <div>
+            <label>场景（可选）</label>
+            <input type="text" id="submit-scope" placeholder="如 scene-frontend">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" id="parse-btn">解析预览</button>
+          <button class="btn" id="submit-clear">清空</button>
+        </div>
+      </div>
+
+      <!-- 步骤 2：解析预览 + 确认 -->
+      <div class="submit-step hidden" id="step-confirm">
+        <div class="parse-preview">
+          <div class="preview-header">
+            <h3>解析结果预览</h3>
+            <span class="text-muted text-sm">确认无误后点击「确认入库」，或返回修改内容</span>
+          </div>
+
+          <div class="preview-grid">
+            <div class="preview-field">
+              <span class="preview-label">任务名称</span>
+              <span class="preview-value" id="pv-task"></span>
+            </div>
+            <div class="preview-field">
+              <span class="preview-label">步骤</span>
+              <ol class="preview-steps" id="pv-steps"></ol>
+            </div>
+            <div class="preview-field">
+              <span class="preview-label">使用工具</span>
+              <span class="preview-value" id="pv-tools"></span>
+            </div>
+            <div class="preview-field">
+              <span class="preview-label">使用插件</span>
+              <span class="preview-value" id="pv-plugins"></span>
+            </div>
+            <div class="preview-field">
+              <span class="preview-label">产物清单</span>
+              <span class="preview-value" id="pv-artifacts"></span>
+            </div>
+            <div class="preview-field" id="pv-evidence-row">
+              <span class="preview-label">证据建议</span>
+              <span class="preview-value" id="pv-evidence"></span>
+            </div>
+          </div>
+
+          <div class="evidence-section">
+            <h4>附加工作区证据（可选，提升信任级别）</h4>
+            <div class="form-row">
+              <label>Git Diff 摘要</label>
+              <textarea id="confirm-diff" rows="3" placeholder="粘贴 git diff --stat 输出，如：3 files changed, 150 insertions(+)"></textarea>
+              <span class="form-hint">提供 diff 可将信任级别从"自行声明"提升为"工作区验证"</span>
+            </div>
+            <div class="form-row">
+              <label>已验证文件（每行一条）</label>
+              <textarea id="confirm-verified" rows="3" placeholder="实际产出并验证的文件路径"></textarea>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" id="confirm-submit">确认入库</button>
+            <button class="btn" id="confirm-back">返回修改</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 步骤 3：提交结果 -->
+      <div class="submit-step hidden" id="step-result">
+        <div id="result-box"></div>
+        <button class="btn mt-4" id="result-new">提交另一份材料</button>
+      </div>
+    </div>
+
+    <!-- Tab 3: 参考列表 -->
+    <div class="absorb-panel" id="tab-refs">
+      <div class="refs-filter-bar">
+        <input type="text" id="refs-scope" placeholder="按场景筛选…" class="refs-filter-input">
+        <input type="text" id="refs-tag" placeholder="按标签筛选…" class="refs-filter-input">
+        <button class="btn btn-sm" id="refs-refresh">刷新</button>
+      </div>
+
+      <div id="refs-list" class="refs-list"></div>
+      <div id="refs-empty" class="refs-empty hidden">
+        <p class="text-muted">还没有参考经验。提交材料后，参考条目会显示在这里。</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/layout.js"></script>
+<script src="js/pages/absorb.js"></script>
+</body>
+</html>

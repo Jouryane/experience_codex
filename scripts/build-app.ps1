@@ -48,12 +48,12 @@ $readmeLines = @(
     "Layout (launcher only starts; logic/pages live on disk):",
     "- Experience.exe         thin launcher (packaged once)",
     "- experience-server.exe  local API process (rebuild/replace alone)",
-    "- ui/                    frontend (edit and refresh the browser)",
+    "- ui/                    frontend (edit and refresh browser)",
     "",
     "Data: <parent-of-exe>/.experience-home (override EXPERIENCE_HOME):",
     "  store.json (experiences) / agents.json (executors) / sessions.json",
     "",
-    "Configure codex under the Agents tab; run tasks from the Sessions tab.",
+    "Configure agents on the Agents page; run tasks on the Tasks page.",
     "CODEX_HOME / secrets are provided by the agent config; Experience",
     "never reads secrets itself."
 )
