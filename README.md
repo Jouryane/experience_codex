@@ -70,6 +70,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 - 当前重点：**规模与使用**——经验树/场景管理、编辑与个性化、外部 Agent
   材料吸收、UI 专项改造；
 - 明确边界：不做多 Agent 自适配，不默认引入向量检索，不自动激活经验。
+- 交付状态与缺口关闭记录：docs/delivery-status.md（2026-09-12：P0/P1 已关闭，
+  多页面 UI + 吸收页 + U7 自动化验收通过）。
 
 ## 文档索引
 
@@ -89,7 +91,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 - 本仓库使用 Apache-2.0（见 LICENSE）；
 - 配套 Codex fork 源自 [openai/codex](https://github.com/openai/codex)
   （Apache-2.0），保留其 README/许可与 upstream 关系；fork 的本地实验
-  改动（内嵌 Experience Gate 等）当前保存在本地仓库，如需可另行发布分支；
+  改动（内嵌 Experience Gate 等）以 **DeepSeek 版本 Codex** 在本地复现，
+  不要求对外发布 fork 分支；
 - 本仓库中的经验核心（store/state/runtime 等）部分由该 fork 提炼而来，
   对外以本仓库为准。
 

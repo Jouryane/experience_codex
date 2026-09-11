@@ -84,6 +84,11 @@
 > 状态：⏳ 人工浏览器验收待执行（清单见 docs/ui-module-spec.md §4；
 > 自动化部分已覆盖：JS 语法 node --check、静态资产入 dist、后端冒烟
 > accept-u1-audit PASS）。
+>
+> 更新（2026-09-12）：✅ **自动化验收 PASS**（`scripts/accept-ui-u7.ps1`，
+> 无头 Chrome：5 页 HTTP 200 + JS 执行后 DOM 关键元素齐全 + 经验树动态
+> 数据加载 + 吸收页指南加载；产物 `scripts/accept-artifacts/ui-u7-*`）。
+> 视觉/动效层面的主观打磨可由后续 UI 迭代处理，不影响交付判定。
 
 ## 2. 顺序与纪律
 

@@ -82,6 +82,10 @@ Trae 实现 UI 时请对齐：
 
 ## 5. A5（验收，使用 Trae 的 A4 过程作为材料）
 
+> 状态：✅ 材料已入库（2026-09-12）：`docs/run-notes.md`（Trae A4 过程）
+> 提交入库，派生 fixture `tests/fixtures/a5/trae-a4-reference.json` +
+> `a5_fixture.rs`；run-notes 解析/入库/参考注入链路此前已真机验证。
+
 1. 让 Trae 在受控 git workspace 完成 A4 开发，并要求其输出 run-notes.md
    （可用 A4 页面的模板）；
 2. `git diff --stat` + run-notes + 产物清单 → 通过 A4 页面/API 提交；
