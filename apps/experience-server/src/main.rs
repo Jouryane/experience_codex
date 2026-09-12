@@ -50,6 +50,11 @@ use experience_core::experience::trace_event::TraceEvent;
 use experience_core::experience::trace_event::TRACE_SCHEMA_VERSION;
 use experience_core::store::ExperienceStore;
 use experience_core::store::ReferenceEntry;
+use experience_core::safety::safe_join;
+use experience_core::redact::Disclosure;
+use experience_core::redact::RedactMode;
+use experience_core::redact::Redactor;
+use experience_core::redact::sha256;
 use tiny_http::Header;
 use tiny_http::Method;
 use tiny_http::Request;
@@ -82,6 +87,11 @@ fn main() {
         "agents.json",
     ))));
     let sessions = Arc::new(SessionStore::load(&home));
+    let redactor = Redactor::new(
+        &load_or_create_redaction_key(&home),
+        redaction_disclosure(),
+        redaction_mode(),
+    );
     let app = Arc::new(App {
         store: Mutex::new(store),
         agents,
@@ -89,6 +99,7 @@ fn main() {
         audit: Mutex::new(()),
         home,
         ui_dir,
+        redactor,
     });
 
     let address = format!("127.0.0.1:{port}");
@@ -117,6 +128,7 @@ struct App {
     audit: Mutex<()>,
     home: PathBuf,
     ui_dir: PathBuf,
+    redactor: Redactor,
 }
 
 fn handle(app: Arc<App>, request: Request) -> Result<(), String> {
@@ -671,7 +683,20 @@ fn handle_api(
                     .get("scope")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string);
-                let draft = parse_run_notes(&markdown);
+                let safe_markdown = app.redactor.redact_text(&markdown);
+                let draft = parse_run_notes(&safe_markdown);
+                let steps = redact_vec(&app.redactor, &draft.steps);
+                let tools = redact_vec(&app.redactor, &draft.tools_used);
+                let plugins = redact_vec(&app.redactor, &draft.plugins_used);
+                let artifacts = redact_vec(&app.redactor, &draft.artifacts);
+                let evidence = redact_vec(&app.redactor, &draft.evidence_lines);
+                let sections = redact_vec(&app.redactor, &draft.sections);
+                let redactions = count_redactions(&safe_markdown)
+                    + steps.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + tools.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + plugins.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + artifacts.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + evidence.iter().map(|value| count_redactions(value)).sum::<usize>();
                 json_response(
                     request,
                     200,
@@ -680,17 +705,19 @@ fn handle_api(
                         "scope": scope,
                         "source": { "agent": agent, "declared": true },
                         "materials": {
-                            "run_notes": markdown,
-                            "steps": draft.steps,
-                            "tools_used": draft.tools_used,
-                            "plugins_used": draft.plugins_used,
-                            "artifacts": draft.artifacts,
+                            "run_notes": safe_markdown,
+                            "steps": steps,
+                            "tools_used": tools,
+                            "plugins_used": plugins,
+                            "artifacts": artifacts,
                         },
                         "evidence": {
                             "provided": serde_json::Value::Null,
-                            "suggested": draft.evidence_lines,
+                            "suggested": evidence,
                         },
-                        "sections": draft.sections,
+                        "sections": sections,
+                        "redacted": true,
+                        "redactions": redactions,
                     }),
                 )
             }
@@ -747,7 +774,19 @@ fn handle_api(
                     .map(|items| items.len())
                     .unwrap_or(0);
                 let workspace_evidence = diff_summary.is_some() || verified_file_count > 0;
-                let draft = parse_run_notes(&markdown);
+                let safe_markdown = app.redactor.redact_text(&markdown);
+                let draft = parse_run_notes(&safe_markdown);
+                let steps = redact_vec(&app.redactor, &draft.steps);
+                let tools = redact_vec(&app.redactor, &draft.tools_used);
+                let plugins = redact_vec(&app.redactor, &draft.plugins_used);
+                let artifacts = redact_vec(&app.redactor, &draft.artifacts);
+                let suggested = redact_vec(&app.redactor, &draft.evidence_lines);
+                let redactions = count_redactions(&safe_markdown)
+                    + steps.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + tools.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + plugins.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + artifacts.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + suggested.iter().map(|value| count_redactions(value)).sum::<usize>();
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|duration| duration.as_nanos())
@@ -764,13 +803,13 @@ fn handle_api(
                 if verified_file_count > 0 {
                     evidence_parts.push(format!("verified_files={verified_file_count}"));
                 }
-                if !draft.artifacts.is_empty() {
-                    evidence_parts.push(format!("artifacts={}", draft.artifacts.join(",")));
+                if !artifacts.is_empty() {
+                    evidence_parts.push(format!("artifacts={}", artifacts.join(",")));
                 }
-                if !draft.evidence_lines.is_empty() {
+                if !suggested.is_empty() {
                     evidence_parts.push(format!(
                         "suggested={}",
-                        l3_cap(&draft.evidence_lines.join("; "), 200)
+                        l3_cap(&suggested.join("; "), 200)
                     ));
                 }
                 let entry = ReferenceEntry {
@@ -778,10 +817,10 @@ fn handle_api(
                     title: draft.task.clone(),
                     scope: scope.clone(),
                     tags: Vec::new(),
-                    body: markdown.clone(),
-                    steps: draft.steps.clone(),
-                    tools_used: draft.tools_used.clone(),
-                    plugins_used: draft.plugins_used.clone(),
+                    body: safe_markdown.clone(),
+                    steps: steps.clone(),
+                    tools_used: tools.clone(),
+                    plugins_used: plugins.clone(),
                     source_agent: agent.clone(),
                     declared: true,
                     trust_level: trust_level_from(workspace_evidence).to_string(),
@@ -793,7 +832,7 @@ fn handle_api(
                     created_at: l1_now_secs(),
                 };
                 let trust = entry.trust_level.clone();
-                let steps = entry.steps.len();
+                let steps_count = entry.steps.len();
                 let mut store = app.store.lock().unwrap();
                 store.insert_reference(entry).map_err(|error| error.to_string())?;
                 persist(&app, &store);
@@ -824,7 +863,9 @@ fn handle_api(
                         "reference_id": id,
                         "trust_level": trust,
                         "task": draft.task,
-                        "steps": steps,
+                        "steps": steps_count,
+                        "redacted": true,
+                        "redactions": redactions,
                     }),
                 )
             }
@@ -890,6 +931,23 @@ fn handle_api(
                     .and_then(serde_json::Value::as_array)
                     .map(|items| items.len())
                     .unwrap_or(0);
+                let task = app.redactor.redact_text(&task);
+                let run_notes = app.redactor.redact_text(&run_notes);
+                let steps = redact_vec(&app.redactor, &steps);
+                let tools_used = redact_vec(&app.redactor, &tools_used);
+                let plugins_used = redact_vec(&app.redactor, &plugins_used);
+                let artifacts = redact_vec(&app.redactor, &artifacts);
+                let diff_summary = diff_summary.map(|value| app.redactor.redact_text(&value));
+                let redactions = count_redactions(&task)
+                    + count_redactions(&run_notes)
+                    + steps.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + tools_used.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + plugins_used.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + artifacts.iter().map(|value| count_redactions(value)).sum::<usize>()
+                    + diff_summary
+                        .as_deref()
+                        .map(count_redactions)
+                        .unwrap_or(0);
                 let workspace_evidence = diff_summary.is_some() || verified_file_count > 0;
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -959,6 +1017,8 @@ fn handle_api(
                         "ok": true,
                         "reference_id": id,
                         "trust_level": trust,
+                        "redacted": true,
+                        "redactions": redactions,
                     }),
                 )
             }
@@ -2255,7 +2315,14 @@ fn resolve_agent_distiller(
     let codex_home = agent_home
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from));
-    Ok((CodexLlmDistiller { exe, codex_home }, fallback))
+    Ok((
+        CodexLlmDistiller {
+            exe,
+            codex_home,
+            redactor: Some(app.redactor.clone()),
+        },
+        fallback,
+    ))
 }
 
 /// Supplementary notes returned with a successful promote (and shown in the
@@ -2292,6 +2359,7 @@ fn llm_compiler_enabled() -> bool {
 struct CodexLlmDistiller {
     exe: PathBuf,
     codex_home: Option<PathBuf>,
+    redactor: Option<Redactor>,
 }
 
 impl L1Distiller for CodexLlmDistiller {
@@ -2301,6 +2369,11 @@ impl L1Distiller for CodexLlmDistiller {
 
     fn distill(&self, round: &RoundTrace) -> Option<Experience> {
         let prompt = llm_distill_prompt(round);
+        let prompt = self
+            .redactor
+            .as_ref()
+            .map(|redactor| redactor.redact_text(&prompt))
+            .unwrap_or(prompt);
         let output = self.compile(&prompt)?;
         let mut draft = parse_llm_experience(&output)?;
         if draft.name.trim().is_empty() {
@@ -2587,6 +2660,7 @@ fn l3_entry(
             (true, false) => entries_text,
             (false, false) => format!("{experiences_text}\n{entries_text}"),
         };
+        let text = app.redactor.redact_text(&text);
         if text.is_empty() {
             ("omitted".to_string(), "no_reference_available".to_string(), String::new())
         } else {
@@ -2855,7 +2929,12 @@ fn l3_execute_step(
                         "write_file: missing string arg 'content'".to_string(),
                     )
                 })?;
-            let target = workspace.join(path);
+            let target = safe_join(workspace, path).map_err(|error| {
+                (
+                    "execution_error".to_string(),
+                    format!("write_file: path guard rejected: {error}"),
+                )
+            })?;
             if let Some(parent) = target.parent() {
                 if !parent.as_os_str().is_empty() {
                     std::fs::create_dir_all(parent).map_err(|error| {
@@ -3270,6 +3349,22 @@ fn reference_entries_text(entries: &[ReferenceEntry], max_chars: usize) -> Strin
     }
 }
 
+const REDACTION_MARKERS: [&str; 5] = ["<masked:", "<payload:", "<id:", "<path:", "<host:"];
+
+fn count_redactions(text: &str) -> usize {
+    REDACTION_MARKERS
+        .iter()
+        .map(|marker| text.matches(marker).count())
+        .sum()
+}
+
+fn redact_vec(redactor: &Redactor, values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| redactor.redact_text(value))
+        .collect()
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct LedgerFile {
     schema_version: u32,
@@ -3281,6 +3376,17 @@ struct LedgerFile {
 /// schema_version 1 with typed record_type; legacy flat arrays still load.
 /// Learning audit stays out of store.json and out of prompts.
 fn append_l1_ledger(app: &App, record: &L1LedgerRecord) {
+    let mut record = record.clone();
+    record.candidate_name = app.redactor.redact_text(&record.candidate_name);
+    record.outcome = app.redactor.redact_text(&record.outcome);
+    record.action = record
+        .action
+        .as_deref()
+        .map(|value| app.redactor.redact_text(value));
+    record.reason = record
+        .reason
+        .as_deref()
+        .map(|value| app.redactor.redact_text(value));
     let _guard = app.audit.lock().unwrap();
     let path = app.home.join("learning-l1.json");
     let mut file = std::fs::read_to_string(&path)
@@ -3620,6 +3726,53 @@ fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+fn redaction_mode() -> RedactMode {
+    match std::env::var("EXPERIENCE_REDACTION")
+        .ok()
+        .map(|value| value.to_lowercase())
+        .as_deref()
+    {
+        Some("off") => RedactMode::Off,
+        Some("strict") => RedactMode::Strict,
+        _ => RedactMode::Standard,
+    }
+}
+
+fn redaction_disclosure() -> Disclosure {
+    match std::env::var("EXPERIENCE_DISCLOSURE")
+        .ok()
+        .map(|value| value.to_lowercase())
+        .as_deref()
+    {
+        Some("metadata" | "metadata-only") => Disclosure::MetadataOnly,
+        Some("content") => Disclosure::Content,
+        _ => Disclosure::Structure,
+    }
+}
+
+/// Per-store HMAC key ("comparable but irreversible"): created once at
+/// `<home>/redaction.key`, derived from local entropy via SHA-256.
+fn load_or_create_redaction_key(home: &Path) -> Vec<u8> {
+    let path = home.join("redaction.key");
+    if let Ok(bytes) = std::fs::read(&path) {
+        if bytes.len() >= 32 {
+            return bytes;
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let seed = format!(
+        "{nanos}:{}:{}",
+        std::process::id(),
+        home.to_string_lossy()
+    );
+    let key = sha256(seed.as_bytes()).to_vec();
+    let _ = std::fs::write(&path, &key);
+    key
 }
 
 fn default_home() -> PathBuf {

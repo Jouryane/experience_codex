@@ -85,6 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 | docs/stage-a-absorb.md | 外部 Agent 材料吸收（run-notes 解析/promote） |
 | docs/ui-module-spec.md · docs/ui-project-plan.md | 管理界面规格与实施计划 |
 | docs/rerun-matrix.md | 全部真机/回归复跑矩阵 |
+| docs/productization-security-execution-plan.md | 安全边界与执行/验证面产品化规划 |
 
 ## 许可与上游
 
