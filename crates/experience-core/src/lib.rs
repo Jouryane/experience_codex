@@ -6,4 +6,6 @@
 
 pub mod experience;
 pub mod domain;
+pub mod redact;
+pub mod safety;
 pub mod store;

@@ -15,6 +15,7 @@
 | P1-1 A5 材料未入库 | ✅ 关闭 | `docs/run-notes.md` 入库；`fixtures/a5/trae-a4-reference.json` + `a5_fixture.rs` |
 | P1-2 codex fork 分支未发布 | ✅ 免除 | 采用 DeepSeek 版本 Codex 本地复现 M5/L4，不要求发布 fork |
 | P2 Trae 中间产物 | ✅ 清理 | `.gitignore` 忽略 `.trae-html-share-packages/`、`docs/frontend-redesign-plan.html` |
+| P0 安全（后续增强） | ✅ 关闭 | P0 工作完成：工作区围栏 + 全链路脱敏（structure/HMAC/预览确认）；`accept-p0-security.ps1` PASS |
 
 ## 已声明的设计边界（非缺陷）
 

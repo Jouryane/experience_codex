@@ -4,6 +4,7 @@ use std::fs;
 
 use experience_core::domain::experience::WorkflowStep;
 use experience_core::domain::gate::ExecutedSideEffect;
+use experience_core::safety::safe_join;
 use serde_json::Value;
 
 use super::runtime::GateContext;
@@ -41,7 +42,8 @@ impl CapabilityRunner for LocalRunner {
                     .get("content")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "write_file: missing string arg 'content'".to_string())?;
-                let target = context.cwd.join(path);
+                let target = safe_join(&context.cwd, path)
+                    .map_err(|error| format!("write_file: path guard rejected: {error}"))?;
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent).map_err(|error| {
                         format!("write_file: cannot create parent dir: {error}")
@@ -107,6 +109,23 @@ mod tests {
         let context = GateContext { cwd: dir.clone() };
         let step = WorkflowStep::new("exec_command", serde_json::json!({ "cmd": "dir" }));
         assert!(runner.run(&context, &step).unwrap_err().contains("unsupported"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_rejects_workspace_escape() {
+        let dir = temp_dir("escape");
+        fs::create_dir_all(&dir).unwrap();
+        let runner = LocalRunner;
+        let context = GateContext { cwd: dir.clone() };
+        for bad in [r"..\..\escape.txt", r"C:\escape.txt", "sub/../../escape.txt"] {
+            let step = WorkflowStep::new(
+                "write_file",
+                serde_json::json!({ "path": bad, "content": "x" }),
+            );
+            let error = runner.run(&context, &step).unwrap_err();
+            assert!(error.contains("path guard"), "must guard {bad}: {error}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

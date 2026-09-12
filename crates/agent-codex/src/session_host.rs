@@ -400,6 +400,7 @@ fn extract_args_summary(value: &Value) -> Option<String> {
     let text = found.as_str().map(str::to_string).unwrap_or_else(|| {
         serde_json::to_string(&found).unwrap_or_default()
     });
+    let text = experience_core::redact::innate_redact(&text);
     const MAX_ARGS_SUMMARY_CHARS: usize = 240;
     if text.chars().count() > MAX_ARGS_SUMMARY_CHARS {
         let mut truncated: String = text.chars().take(MAX_ARGS_SUMMARY_CHARS).collect();
