@@ -22,6 +22,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use agent_manager::AgentConfig;
+use serde::Deserialize;
+use serde::Serialize;
 use agent_manager::AgentManager;
 use agent_manager::AgentState;
 use session_manager::Session;
@@ -50,7 +52,18 @@ use experience_core::experience::trace_event::TraceEvent;
 use experience_core::experience::trace_event::TRACE_SCHEMA_VERSION;
 use experience_core::store::ExperienceStore;
 use experience_core::store::ReferenceEntry;
-use experience_core::safety::safe_join;
+use experience_core::store::CandidateOrigin;
+use experience_core::similarity;
+use experience_core::policy::capability_family;
+use experience_core::policy::validate_policy;
+use experience_core::policy::CapabilityPolicy;
+use experience_core::policy::GLOBAL_SCOPE_KEY;
+use experience_core::exec::execute_step as exec_step;
+use experience_core::exec::restore_from_manifest;
+use experience_core::exec::write_backup_manifest;
+use experience_core::exec::BackupEntry;
+use experience_core::exec::StepContext;
+use experience_core::state_source;
 use experience_core::redact::Disclosure;
 use experience_core::redact::RedactMode;
 use experience_core::redact::Redactor;
@@ -97,6 +110,7 @@ fn main() {
         agents,
         sessions,
         audit: Mutex::new(()),
+        settings: Mutex::new(Settings::load(&home)),
         home,
         ui_dir,
         redactor,
@@ -129,13 +143,58 @@ struct App {
     home: PathBuf,
     ui_dir: PathBuf,
     redactor: Redactor,
+    /// S4: file-backed settings; environment variables still win when set.
+    settings: Mutex<Settings>,
+}
+
+/// S4 settings: persisted under `<home>/settings.json`, with environment
+/// variables taking precedence when explicitly set (old deployments keep
+/// working unchanged).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    #[serde(default)]
+    pub llm_compiler: bool,
+    #[serde(default)]
+    pub injection_policy: bool,
+    /// Undo surface: keep at most this many run snapshots per session.
+    #[serde(default = "default_undo_keep")]
+    pub undo_keep: u32,
+}
+
+fn default_undo_keep() -> u32 {
+    20
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            llm_compiler: false,
+            injection_policy: false,
+            undo_keep: default_undo_keep(),
+        }
+    }
+}
+
+impl Settings {
+    fn load(home: &Path) -> Self {
+        match std::fs::read_to_string(home.join("settings.json")) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+            Err(_) => Self::default(),
+        }
+    }
+
+    fn save(&self, home: &Path) -> Result<(), String> {
+        let path = home.join("settings.json");
+        let json = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
+        std::fs::write(&path, json).map_err(|error| error.to_string())
+    }
 }
 
 fn handle(app: Arc<App>, request: Request) -> Result<(), String> {
     let url = request.url().to_string();
     let method = request.method().clone();
     if url.starts_with("/api/") {
-        return handle_api(app, method, &url, request);
+        return handle_api(app, method, url, request);
     }
     let relative = match url.split('?').next().unwrap_or("/") {
         "/" => "index.html".to_string(),
@@ -147,11 +206,58 @@ fn handle(app: Arc<App>, request: Request) -> Result<(), String> {
 fn handle_api(
     app: Arc<App>,
     method: Method,
-    url: &str,
+    url: String,
     mut request: Request,
 ) -> Result<(), String> {
+    // Read the body once; a read failure still has the live request for a
+    // real 400 response. Validation failures inside the routes become 400s
+    // instead of a silent stderr line (the previous behavior dropped them).
+    let body = match read_body(&mut request) {
+        Ok(body) => body,
+        Err(error) => return bad_request(request, error),
+    };
+    let mut owned = Some(request);
+    let result = {
+        let mut responder = Responder { slot: &mut owned };
+        routes(app, method, &url, &mut responder, &body)
+    };
+    if result.is_err() {
+        // A route returned before responding (validation/serialization):
+        // answer with a 400 here so the client never hangs.
+        if let Some(request) = owned.take() {
+            let message = result.err().unwrap_or_default();
+            return bad_request(request, message);
+        }
+    }
+    result
+}
+
+/// Single-response guard for the API. Routes borrow this instead of the raw
+/// request, so every branch can answer exactly once (validation failures
+/// become JSON 400s rather than a dropped connection).
+struct Responder<'r> {
+    slot: &'r mut Option<Request>,
+}
+
+impl<'r> Responder<'r> {
+    /// JSON answer used by every route. `status` is the HTTP status code.
+    fn answer(&mut self, status: u16, value: &serde_json::Value) -> Result<(), String> {
+        match self.slot.take() {
+            Some(request) => json_response(request, status, value),
+            None => Err("api route attempted to respond twice".to_string()),
+        }
+    }
+}
+
+fn routes(
+    app: Arc<App>,
+    method: Method,
+    url: &str,
+    mut responder: &mut Responder<'_>,
+    body: &str,
+) -> Result<(), String> {
     if url == "/api/health" {
-        return json_response(request, 200, &serde_json::json!({"ok": true}));
+        return responder.answer(200, &serde_json::json!({"ok": true}));
     }
 
     if url == "/api/usage" {
@@ -159,10 +265,280 @@ fn handle_api(
             Method::Get => {
                 let _guard = app.audit.lock().unwrap();
                 let usage = load_usage_unlocked(&app);
-                json_response(request, 200, &serde_json::to_value(&usage).unwrap())
+                responder.answer(200, &serde_json::to_value(&usage).unwrap())
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
+    }
+
+    // S1-a capability policy surface. GET resolves the effective policy for a
+    // scope (`?scope=`); PUT writes `__global__` or a scene policy, and can
+    // clear an entry back to the global fallback with `"clear": true`.
+    if url == "/api/policy" || url.starts_with("/api/policy?") {
+        return match method {
+            Method::Get => {
+                let scope = query_param(&url, "scope");
+                let run_root = app.home.join("run").to_string_lossy().to_string();
+                let store = app.store.lock().unwrap();
+                let effective = store.policy_for_scope(scope.as_deref());
+                let scope_has_policy = scope
+                    .as_deref()
+                    .map(|value| store.has_policy_for_scope(value))
+                    .unwrap_or(false);
+                let stored: Vec<serde_json::Value> = store
+                    .scope_policies()
+                    .iter()
+                    .map(|(scope, policy)| {
+                        serde_json::json!({ "scope": scope, "policy": policy })
+                    })
+                    .collect();
+                responder.answer(
+                    200,
+                    &serde_json::json!({
+                        "scope": scope,
+                        "scope_has_policy": scope_has_policy,
+                        "effective": effective,
+                        "stored": stored,
+                        "run_root": run_root,
+                    }),
+                )
+            }
+            Method::Put => {
+                let value: serde_json::Value = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return responder.answer(
+                            400,
+                            &serde_json::json!({ "error": format!("invalid policy body: {error}") }),
+                        )
+                    }
+                };
+                let scope = value
+                    .get("scope")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| GLOBAL_SCOPE_KEY.to_string());
+                let actor = value
+                    .get("actor")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("local-user")
+                    .to_string();
+                let clear = value
+                    .get("clear")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                if clear {
+                    let mut store = app.store.lock().unwrap();
+                    if let Err(error) = store.set_scope_policy(&scope, None) {
+                        return responder.answer(
+                            400,
+                            &serde_json::json!({ "error": error.to_string() }),
+                        );
+                    }
+                    if let Err(error) = store.save() {
+                        return responder.answer(
+                            500,
+                            &serde_json::json!({ "error": error.to_string() }),
+                        );
+                    }
+                    let effective = store.policy_for_scope(
+                        (scope != GLOBAL_SCOPE_KEY).then_some(scope.as_str()),
+                    );
+                    drop(store);
+                    append_policy_ledger(&app, &scope, &actor, "cleared", None);
+                    return responder.answer(
+                        200,
+                        &serde_json::json!({
+                            "ok": true,
+                            "scope": scope,
+                            "cleared": true,
+                            "effective": effective,
+                        }),
+                    );
+                }
+                let policy: CapabilityPolicy = match value
+                    .get("policy")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                {
+                    Ok(Some(policy)) => policy,
+                    Ok(None) => {
+                        return responder.answer(
+                            400,
+                            &serde_json::json!({ "error": "missing 'policy' object" }),
+                        )
+                    }
+                    Err(error) => {
+                        return responder.answer(
+                            400,
+                            &serde_json::json!({ "error": format!("invalid policy body: {error}") }),
+                        )
+                    }
+                };
+                if let Err(problem) = validate_policy(&policy) {
+                    return responder.answer(
+                        400,
+                        &serde_json::json!({ "error": format!("invalid policy: {problem}") }),
+                    );
+                }
+                let mut store = app.store.lock().unwrap();
+                let reason = policy_summary(&policy);
+                if let Err(error) = store.set_scope_policy(&scope, Some(policy.clone())) {
+                    return responder.answer(
+                        400,
+                        &serde_json::json!({ "error": error.to_string() }),
+                    );
+                }
+                if let Err(error) = store.save() {
+                    return responder.answer(
+                        500,
+                        &serde_json::json!({ "error": error.to_string() }),
+                    );
+                }
+                drop(store);
+                append_policy_ledger(&app, &scope, &actor, "set", Some(&reason));
+                responder.answer(
+                    200,
+                    &serde_json::json!({ "ok": true, "scope": scope, "policy": policy }),
+                )
+            }
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    // S1-c backup surface: list a session's run snapshots, restore one.
+    if url == "/api/backups" || url.starts_with("/api/backups?") {
+        return match method {
+            Method::Get => {
+                let session = query_param(&url, "session").unwrap_or_default();
+                if !valid_backup_id(&session) {
+                    return responder.answer(
+                        400,
+                        &serde_json::json!({ "error": "invalid 'session'" }),
+                    );
+                }
+                let root = app.home.join("backups").join(&session);
+                let mut snapshots: Vec<serde_json::Value> = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        if !entry.path().is_dir() {
+                            continue;
+                        }
+                        let manifest_path = entry.path().join("manifest.json");
+                        let manifest = std::fs::read_to_string(&manifest_path)
+                            .ok()
+                            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok());
+                        snapshots.push(serde_json::json!({
+                            "snapshot": entry.file_name().to_string_lossy(),
+                            "path": entry.path().to_string_lossy(),
+                            "manifest": manifest,
+                        }));
+                    }
+                }
+                snapshots.sort_by(|left, right| {
+                    left["snapshot"]
+                        .as_str()
+                        .unwrap_or("")
+                        .cmp(right["snapshot"].as_str().unwrap_or(""))
+                });
+                responder.answer(
+                    200,
+                    &serde_json::json!({ "session": session, "backups": snapshots }),
+                )
+            }
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    if let Some(rest) = url.strip_prefix("/api/backups/") {
+        if let Some(session) = rest.strip_suffix("/restore") {
+            if method != Method::Post {
+                return method_not_allowed(&mut responder);
+            }
+            if !valid_backup_id(session) {
+                return responder.answer(
+                    400,
+                    &serde_json::json!({ "error": "invalid 'session'" }),
+                );
+            }
+            let value: serde_json::Value = match serde_json::from_str(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    return responder.answer(
+                        400,
+                        &serde_json::json!({ "error": format!("invalid restore body: {error}") }),
+                    )
+                }
+            };
+            let snapshot = value
+                .get("snapshot")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !valid_backup_id(&snapshot) {
+                return responder.answer(
+                    400,
+                    &serde_json::json!({ "error": "missing or invalid 'snapshot'" }),
+                );
+            }
+            let manifest =
+                app.home
+                    .join("backups")
+                    .join(session)
+                    .join(&snapshot)
+                    .join("manifest.json");
+            if !manifest.exists() {
+                return responder.answer(
+                    404,
+                    &serde_json::json!({ "error": "backup snapshot not found" }),
+                );
+            }
+            let actor = value
+                .get("actor")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("local-user")
+                .to_string();
+            match restore_from_manifest(&manifest) {
+                Ok(report) => {
+                    append_l1_ledger(
+                        &app,
+                        &L1LedgerRecord {
+                            record_type: "backup_restored".to_string(),
+                            candidate_name: session.to_string(),
+                            session_id: Some(session.to_string()),
+                            thread_id: None,
+                            trace_version: None,
+                            action: Some("restore".to_string()),
+                            from: None,
+                            to: None,
+                            reason: Some(format!(
+                                "actor={actor};snapshot={snapshot};restored={};deleted={}",
+                                report.restored.len(),
+                                report.deleted.len()
+                            )),
+                            outcome: "completed".to_string(),
+                            recorded_at: l1_now_secs(),
+                        },
+                    );
+                    return responder.answer(
+                        200,
+                        &serde_json::json!({
+                            "ok": true,
+                            "snapshot": snapshot,
+                            "restored": report.restored,
+                            "deleted": report.deleted,
+                        }),
+                    )
+                }
+                Err(error) => return responder.answer(
+                    400,
+                    &serde_json::json!({ "error": format!("restore failed: {error}") }),
+                ),
+            }
+        } else {
+            return responder.answer(404, &serde_json::json!({ "error": "unknown backups path" }))
+        }
     }
 
     if url == "/api/audit" || url.starts_with("/api/audit?") {
@@ -176,13 +552,12 @@ fn handle_api(
                 let ledger = std::fs::read_to_string(app.home.join("learning-l1.json"))
                     .unwrap_or_default();
                 let records = audit_query(&ledger, record_type.as_deref(), name.as_deref(), limit);
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({ "records": records }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -195,18 +570,17 @@ fn handle_api(
                     .iter()
                     .map(|entry| serde_json::to_value(entry).unwrap())
                     .collect();
-                json_response(request, 200, &serde_json::Value::Array(list))
+                responder.answer( 200, &serde_json::Value::Array(list))
             }
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let config: AgentConfig = serde_json::from_str(&body)
                     .map_err(|error| format!("invalid agent body: {error}"))?;
                 let mut agents = app.agents.lock().unwrap();
                 agents.create(config).map_err(|error| error)?;
                 agents_persist(&app, &agents);
-                json_response(request, 201, &serde_json::json!({"ok": true}))
+                responder.answer( 201, &serde_json::json!({"ok": true}))
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -220,28 +594,28 @@ fn handle_api(
                 let agents = app.agents.lock().unwrap();
                 match agents.get(id) {
                     Some(entry) => {
-                        json_response(request, 200, &serde_json::to_value(entry).unwrap())
+                        responder.answer( 200, &serde_json::to_value(entry).unwrap())
                     }
-                    None => not_found(request, format!("agent '{id}' not found")),
+                    None => not_found(&mut responder, format!("agent '{id}' not found")),
                 }
             }
             (Method::Delete, None) => {
                 let mut agents = app.agents.lock().unwrap();
                 agents.remove(id).map_err(|error| error)?;
                 agents_persist(&app, &agents);
-                json_response(request, 200, &serde_json::json!({"ok": true}))
+                responder.answer( 200, &serde_json::json!({"ok": true}))
             }
             (Method::Post, Some("connect")) => {
                 let mut agents = app.agents.lock().unwrap();
                 let status = agents.connect(id).map_err(|error| error)?;
-                json_response(request, 200, &serde_json::to_value(&status).unwrap())
+                responder.answer( 200, &serde_json::to_value(&status).unwrap())
             }
             (Method::Post, Some("disconnect")) => {
                 let mut agents = app.agents.lock().unwrap();
                 let status = agents.disconnect(id).map_err(|error| error)?;
-                json_response(request, 200, &serde_json::to_value(&status).unwrap())
+                responder.answer( 200, &serde_json::to_value(&status).unwrap())
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -251,10 +625,9 @@ fn handle_api(
                 let sessions = app.sessions.list();
                 let list: Vec<serde_json::Value> =
                     sessions.iter().map(session_summary).collect();
-                json_response(request, 200, &serde_json::Value::Array(list))
+                responder.answer( 200, &serde_json::Value::Array(list))
             }
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let agent_id = value
@@ -289,6 +662,18 @@ fn handle_api(
                     for capability in list {
                         if !is_known_capability(capability) {
                             return Err(format!("unknown capability '{capability}'"));
+                        }
+                        // S1-a: a session may only *narrow* the effective
+                        // policy; asking for something the scope forbids is
+                        // refused up front instead of failing at execution.
+                        let effective = {
+                            let store = app.store.lock().unwrap();
+                            store.policy_for_scope(scope.as_deref())
+                        };
+                        if !capability_within_policy(&effective, capability) {
+                            return Err(format!(
+                                "capability '{capability}' exceeds the policy for this scope"
+                            ));
                         }
                     }
                 }
@@ -356,8 +741,7 @@ fn handle_api(
                         _ => {
                             let error = "agent executable 无法解析（session channel）".to_string();
                             sessions.finish(&session_id, false, error.clone(), error.clone());
-                            return json_response(
-                                request,
+                            return responder.answer(
                                 500,
                                 &serde_json::json!({ "error": error }),
                             );
@@ -463,8 +847,7 @@ fn handle_api(
                             ),
                         }
                     });
-                    return json_response(
-                        request,
+                    return responder.answer(
                         201,
                         &serde_json::to_value(&session).unwrap(),
                     );
@@ -485,28 +868,26 @@ fn handle_api(
                                 session_timeout(),
                             )
                         });
-                        json_response(request, 201, &serde_json::to_value(&session).unwrap())
+                        responder.answer( 201, &serde_json::to_value(&session).unwrap())
                     }
                     Err(error) => {
                         sessions.finish(&session_id, false, error.clone(), error.clone());
-                        json_response(
-                            request,
+                        responder.answer(
                             500,
                             &serde_json::json!({ "error": error }),
                         )
                     }
                 }
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if let Some(id) = url.strip_prefix("/api/sessions/") {
         if let Some(resume_id) = id.strip_suffix("/resume") {
             if method != Method::Post {
-                return method_not_allowed(request);
+                return method_not_allowed(&mut responder);
             }
-            let body = read_body(&mut request)?;
             let value: serde_json::Value =
                 serde_json::from_str(&body).map_err(|error| error.to_string())?;
             let follow_up = value
@@ -600,36 +981,35 @@ fn handle_api(
                     ),
                 }
             });
-            return json_response(request, 201, &serde_json::to_value(&session).unwrap());
+            return responder.answer( 201, &serde_json::to_value(&session).unwrap());
         }
         if let Some(action) = id.strip_suffix("/cancel") {
             if method != Method::Post {
-                return method_not_allowed(request);
+                return method_not_allowed(&mut responder);
             }
             return match app.sessions.cancel(action) {
-                Ok(()) => json_response(request, 200, &serde_json::json!({"ok": true})),
-                Err(error) => not_found(request, error),
+                Ok(()) => responder.answer( 200, &serde_json::json!({"ok": true})),
+                Err(error) => not_found(&mut responder, error),
             };
         }
         return match method {
             Method::Get => match app.sessions.get(id) {
                 Some(session) => {
-                    json_response(request, 200, &serde_json::to_value(&session).unwrap())
+                    responder.answer( 200, &serde_json::to_value(&session).unwrap())
                 }
-                None => not_found(request, format!("session '{id}' not found")),
+                None => not_found(&mut responder, format!("session '{id}' not found")),
             },
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if url == "/api/fs/roots" {
         return match method {
-            Method::Get => json_response(
-                request,
+            Method::Get => responder.answer(
                 200,
                 &serde_json::json!({ "roots": fs_browse::list_roots() }),
             ),
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -643,22 +1023,20 @@ fn handle_api(
                     .unwrap_or("");
                 let dir = percent_decode(raw);
                 match fs_browse::browse(&dir) {
-                    Ok((path, entries)) => json_response(
-                        request,
+                    Ok((path, entries)) => responder.answer(
                         200,
                         &serde_json::json!({ "path": path, "entries": entries }),
                     ),
-                    Err(error) => not_found(request, error),
+                    Err(error) => not_found(&mut responder, error),
                 }
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if url == "/api/ingestion/parse" {
         return match method {
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let markdown = value
@@ -668,8 +1046,7 @@ fn handle_api(
                     .unwrap_or("")
                     .to_string();
                 if markdown.trim().is_empty() {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "缺少 markdown/content" }),
                     );
@@ -697,8 +1074,7 @@ fn handle_api(
                     + plugins.iter().map(|value| count_redactions(value)).sum::<usize>()
                     + artifacts.iter().map(|value| count_redactions(value)).sum::<usize>()
                     + evidence.iter().map(|value| count_redactions(value)).sum::<usize>();
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({
                         "task": draft.task,
@@ -721,14 +1097,13 @@ fn handle_api(
                     }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if url == "/api/ingestion/run-notes" {
         return match method {
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let markdown = value
@@ -738,8 +1113,7 @@ fn handle_api(
                     .unwrap_or("")
                     .to_string();
                 if markdown.trim().is_empty() {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "缺少 markdown/content" }),
                     );
@@ -855,8 +1229,7 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     201,
                     &serde_json::json!({
                         "ok": true,
@@ -869,7 +1242,7 @@ fn handle_api(
                     }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -877,16 +1250,15 @@ fn handle_api(
         return match method {
             Method::Get => {
                 let agent = query_param(&url, "agent").unwrap_or_else(|| "generic".to_string());
-                json_response(request, 200, &ingestion_guide(&agent))
+                responder.answer( 200, &ingestion_guide(&agent))
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if url == "/api/ingestion/package" {
         return match method {
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let text = |path: &[&str]| -> Option<String> {
@@ -1010,8 +1382,7 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     201,
                     &serde_json::json!({
                         "ok": true,
@@ -1022,7 +1393,7 @@ fn handle_api(
                     }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -1046,22 +1417,20 @@ fn handle_api(
                     let right_at = right["created_at"].as_u64().unwrap_or(0);
                     right_at.cmp(&left_at)
                 });
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({ "references": values }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if let Some(rest) = url.strip_prefix("/api/references/") {
         if let Some(id) = rest.strip_suffix("/promote") {
             if method != Method::Post {
-                return method_not_allowed(request);
+                return method_not_allowed(&mut responder);
             }
-            let body = read_body(&mut request)?;
             let actor = request_actor(&body);
             let entry = {
                 let store = app.store.lock().unwrap();
@@ -1071,8 +1440,7 @@ fn handle_api(
                     .ok_or_else(|| format!("reference '{id}' not found"))?
             };
             if entry.steps.is_empty() {
-                return json_response(
-                    request,
+                return responder.answer(
                     400,
                     &serde_json::json!({ "error": "reference 缺少 steps，无法提升为可执行候选" }),
                 );
@@ -1090,8 +1458,7 @@ fn handle_api(
                 match resolve_agent_distiller(&app, agent_id.as_deref()) {
                 Ok(resolved) => resolved,
                 Err(message) => {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({
                             "error": message,
@@ -1115,15 +1482,13 @@ fn handle_api(
                     .collect(),
             };
             let Some(mut draft) = distiller.distill(&round) else {
-                return json_response(
-                    request,
+                return responder.answer(
                     400,
                     &serde_json::json!({ "error": "LLM compiler 未能抽出可执行体（诚实拒绝）" }),
                 );
             };
             if let Err(issue) = validate_editable_body(&draft) {
-                return json_response(
-                    request,
+                return responder.answer(
                     400,
                     &serde_json::json!({ "error": issue }),
                 );
@@ -1152,8 +1517,7 @@ fn handle_api(
                     recorded_at: l1_now_secs(),
                 },
             );
-            return json_response(
-                request,
+            return responder.answer(
                 201,
                 &serde_json::json!({
                     "ok": true,
@@ -1170,21 +1534,19 @@ fn handle_api(
                 let scope = query_param(&url, "scope");
                 let store = app.store.lock().unwrap();
                 let export = export_experiences(&store, scope.as_deref());
-                json_response(request, 200, &export)
+                responder.answer( 200, &export)
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
     if url == "/api/experiences/import" {
         return match method {
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 if value.get("scope").is_none() {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "import 需要 'scope'（可为 null）" }),
                     );
@@ -1221,13 +1583,12 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     201,
                     &serde_json::json!({ "ok": true, "imported": count }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -1237,9 +1598,9 @@ fn handle_api(
                 let cwd = query_param(&url, "cwd")
                     .map(PathBuf::from)
                     .unwrap_or_else(|| app.home.clone());
-                json_response(request, 200, &state_snapshot(&cwd))
+                responder.answer( 200, &state_snapshot(&cwd))
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -1285,6 +1646,12 @@ fn handle_api(
                                 .user_confidence_of(&experience.name)
                                 .map(|value| serde_json::json!(value))
                                 .unwrap_or(serde_json::Value::Null);
+                            // S3.5 provenance: hosts/UI can tell where an
+                            // experience came from without touching domain types.
+                            item["origin"] = store
+                                .candidate_origin_of(&experience.name)
+                                .map(|origin| serde_json::to_value(origin).unwrap_or(serde_json::Value::Null))
+                                .unwrap_or(serde_json::Value::Null);
                             item
                         })
                         .collect()
@@ -1298,18 +1665,17 @@ fn handle_api(
                             .unwrap_or(false)
                     });
                 }
-                json_response(request, 200, &serde_json::Value::Array(summaries))
+                responder.answer( 200, &serde_json::Value::Array(summaries))
             }
             Method::Post => {
-                let body = read_body(&mut request)?;
                 let experience: Experience = serde_json::from_str(&body)
                     .map_err(|error| format!("invalid experience body: {error}"))?;
                 let mut store = app.store.lock().unwrap();
                 store.insert(experience).map_err(|error| error.to_string())?;
                 persist(&app, &store);
-                json_response(request, 201, &serde_json::json!({"ok": true}))
+                responder.answer( 201, &serde_json::json!({"ok": true}))
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -1320,9 +1686,274 @@ fn handle_api(
                 let status = query_param(&url, "status");
                 let store = app.store.lock().unwrap();
                 let tree = experience_tree(&store, scope.as_deref(), status.as_deref());
-                json_response(request, 200, &tree)
+                responder.answer( 200, &tree)
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    // S3.5 read-only similarity view: same-family clusters + ranked pairs.
+    // Never merges; hosts/UI decide what to do with the suggestion.
+    if url == "/api/similarity" || url.starts_with("/api/similarity?") {
+        return match method {
+            Method::Get => {
+                let scope = query_param(&url, "scope");
+                let threshold = query_param(&url, "threshold")
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .unwrap_or(0.5);
+                let cap = query_param(&url, "cap")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(50);
+                let store = app.store.lock().unwrap();
+                let items: Vec<&Experience> = store
+                    .all()
+                    .iter()
+                    .filter(|experience| {
+                        store.is_in_scope(&experience.name, scope.as_deref())
+                    })
+                    .collect();
+                let clusters: Vec<serde_json::Value> = similarity::clusters(&items, threshold)
+                    .into_iter()
+                    .map(|cluster| {
+                        serde_json::json!({
+                            "label": cluster.label,
+                            "members": cluster.members,
+                            "max_similarity": cluster.max_similarity,
+                        })
+                    })
+                    .collect();
+                let pairs: Vec<serde_json::Value> =
+                    similarity::pairs(&items, threshold, cap)
+                        .into_iter()
+                        .map(|pair| {
+                            serde_json::json!({
+                                "left": pair.left,
+                                "right": pair.right,
+                                "similarity": pair.similarity,
+                            })
+                        })
+                        .collect();
+                responder.answer(
+                    200,
+                    &serde_json::json!({
+                        "scope": scope,
+                        "threshold": threshold,
+                        "clusters": clusters,
+                        "pairs": pairs,
+                    }),
+                )
+            }
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    // S3 read-only registry view: which predicate families are registered and
+    // how fresh their observations are. Hosts can use this to build their own
+    // routing/UI on top of the same contract.
+    if url == "/api/state/sources" {
+        return match method {
+            Method::Get => {
+                let registry = serde_json::json!({
+                    "families": [
+                        {
+                            "id": "fs",
+                            "predicates": ["cwd.exists", "file:<p>.exists", "file:<p>.content", "file:<p>.size", "file:<p>.sha256", "dir:<p>.exists"],
+                            "freshness_ttl_secs": 60,
+                            "requires_policy": null
+                        },
+                        {
+                            "id": "exec",
+                            "predicates": ["process.exit_code:<step_id>", "process.stdout_contains:<step_id>"],
+                            "freshness_ttl_secs": 30,
+                            "requires_policy": "exec=allowlist"
+                        },
+                        {
+                            "id": "git",
+                            "predicates": ["git.dirty", "git.branch", "git.last_commit"],
+                            "freshness_ttl_secs": 30,
+                            "requires_policy": null
+                        },
+                        {
+                            "id": "http",
+                            "predicates": ["http.status:<url>", "http.body_sha256:<url>"],
+                            "freshness_ttl_secs": 15,
+                            "requires_policy": "network"
+                        },
+                        {
+                            "id": "net",
+                            "predicates": ["port.open:<n>"],
+                            "freshness_ttl_secs": 10,
+                            "requires_policy": null
+                        }
+                    ],
+                    "unregistered_keys_are": "unknown",
+                    "unknown_semantics": "not-executed",
+                });
+                responder.answer(200, &registry)
+            }
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    // S4 settings surface: file-backed, environment variables still win.
+    if url == "/api/settings" {
+        return match method {
+            Method::Get => {
+                let settings = app.settings.lock().unwrap().clone();
+                let env_compiler = std::env::var("EXPERIENCE_LLM_COMPILER").ok();
+                let env_injection = std::env::var("EXPERIENCE_INJECTION_POLICY").ok();
+                responder.answer(
+                    200,
+                    &serde_json::json!({
+                        "settings": settings,
+                        "effective": {
+                            "llm_compiler": llm_compiler_setting(&app),
+                            "injection_policy": injection_policy_setting(&app),
+                        },
+                        "env_override": {
+                            "llm_compiler": env_compiler,
+                            "injection_policy": env_injection,
+                        },
+                        "redaction": {
+                            "mode": std::env::var("EXPERIENCE_REDACTION").unwrap_or_else(|_| "standard".to_string()),
+                            "disclosure": std::env::var("EXPERIENCE_DISCLOSURE").unwrap_or_else(|_| "structure".to_string()),
+                        },
+                    }),
+                )
+            }
+            Method::Put => {
+                let value: serde_json::Value = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return responder.answer(
+                            400,
+                            &serde_json::json!({ "error": format!("invalid settings body: {error}") }),
+                        )
+                    }
+                };
+                let mut settings = app.settings.lock().unwrap();
+                if let Some(value) = value.get("llm_compiler").and_then(serde_json::Value::as_bool) {
+                    settings.llm_compiler = value;
+                }
+                if let Some(value) = value
+                    .get("injection_policy")
+                    .and_then(serde_json::Value::as_bool)
+                {
+                    settings.injection_policy = value;
+                }
+                if let Some(value) = value.get("undo_keep").and_then(serde_json::Value::as_u64) {
+                    settings.undo_keep = value.clamp(1, 200) as u32;
+                }
+                let snapshot = settings.clone();
+                if let Err(error) = settings.save(&app.home) {
+                    return responder.answer(
+                        500,
+                        &serde_json::json!({ "error": error }),
+                    );
+                }
+                drop(settings);
+                append_l1_ledger(
+                    &app,
+                    &L1LedgerRecord {
+                        record_type: "settings_updated".to_string(),
+                        candidate_name: "settings".to_string(),
+                        session_id: None,
+                        thread_id: None,
+                        trace_version: None,
+                        action: Some("set_settings".to_string()),
+                        from: None,
+                        to: None,
+                        reason: Some(format!(
+                            "actor={};llm_compiler={};injection_policy={};undo_keep={}",
+                            value
+                                .get("actor")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("local-user"),
+                            snapshot.llm_compiler,
+                            snapshot.injection_policy,
+                            snapshot.undo_keep
+                        )),
+                        outcome: "ok".to_string(),
+                        recorded_at: l1_now_secs(),
+                    },
+                );
+                responder.answer(
+                    200,
+                    &serde_json::json!({
+                        "ok": true,
+                        "settings": snapshot,
+                        "effective": {
+                            "llm_compiler": llm_compiler_setting(&app),
+                            "injection_policy": injection_policy_setting(&app),
+                        },
+                    }),
+                )
+            }
+            _ => method_not_allowed(&mut responder),
+        };
+    }
+
+    // S4 undo surface: recent experience executions joined with their backup
+    // snapshots, so the UI can offer one-click restore.
+    if url == "/api/undo" || url.starts_with("/api/undo?") {
+        return match method {
+            Method::Get => {
+                let limit = query_param(&url, "limit")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(20);
+                let _guard = app.audit.lock().unwrap();
+                let ledger = std::fs::read_to_string(app.home.join("learning-l1.json"))
+                    .unwrap_or_default();
+                let records = audit_query(&ledger, Some("experience_execution"), None, Some(limit));
+                let mut entries: Vec<serde_json::Value> = Vec::new();
+                for record in records {
+                    let session = record
+                        .get("session_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let reason = record
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let mut snapshots: Vec<serde_json::Value> = Vec::new();
+                    if valid_backup_id(&session) {
+                        let root = app.home.join("backups").join(&session);
+                        if let Ok(entries) = std::fs::read_dir(&root) {
+                            for entry in entries.flatten() {
+                                if !entry.path().is_dir() {
+                                    continue;
+                                }
+                                let manifest = entry.path().join("manifest.json");
+                                if !manifest.exists() {
+                                    continue;
+                                }
+                                let parsed = std::fs::read_to_string(&manifest)
+                                    .ok()
+                                    .and_then(|json| {
+                                        serde_json::from_str::<serde_json::Value>(&json).ok()
+                                    });
+                                snapshots.push(serde_json::json!({
+                                    "snapshot": entry.file_name().to_string_lossy(),
+                                    "path": entry.path().to_string_lossy(),
+                                    "manifest": parsed,
+                                }));
+                            }
+                        }
+                    }
+                    entries.push(serde_json::json!({
+                        "candidate_name": record.get("candidate_name"),
+                        "outcome": record.get("outcome"),
+                        "session_id": session,
+                        "recorded_at": record.get("recorded_at"),
+                        "backup_hint": reason.contains("backup="),
+                        "snapshots": snapshots,
+                    }));
+                }
+                responder.answer(200, &serde_json::json!({ "runs": entries }))
+            }
+            _ => method_not_allowed(&mut responder),
         };
     }
 
@@ -1354,19 +1985,18 @@ fn handle_api(
                             .user_confidence_of(name)
                             .map(|value| serde_json::json!(value))
                             .unwrap_or(serde_json::Value::Null);
-                        json_response(request, 200, &value)
+                        responder.answer( 200, &value)
                     }
-                    None => not_found(request, format!("experience '{name}' not found")),
+                    None => not_found(&mut responder, format!("experience '{name}' not found")),
                 }
             }
             (Method::Delete, None) => {
                 let mut store = app.store.lock().unwrap();
                 store.remove(name).map_err(|error| error.to_string())?;
                 persist(&app, &store);
-                json_response(request, 200, &serde_json::json!({"ok": true}))
+                responder.answer( 200, &serde_json::json!({"ok": true}))
             }
             (Method::Post, Some("scope")) => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let scope = value
@@ -1402,14 +2032,12 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({ "ok": true, "scope": scope }),
                 )
             }
             (Method::Post, Some("display_name")) => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let display_name = value
@@ -1447,14 +2075,12 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({ "ok": true, "display_name": display_name }),
                 )
             }
             (Method::Post, Some("user-preference")) => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let usage = value
@@ -1505,14 +2131,12 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(request, 200, &serde_json::json!({ "ok": true }))
+                responder.answer( 200, &serde_json::json!({ "ok": true }))
             }
             (Method::Post, Some("draft")) => {
-                let body = read_body(&mut request)?;
                 let actor = request_actor(&body);
                 if name.ends_with("__draft") {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "draft 不能再 draft" }),
                     );
@@ -1524,8 +2148,7 @@ fn handle_api(
                     .ok_or_else(|| format!("experience '{name}' not found"))?;
                 let draft_name = format!("{name}__draft");
                 if store.get(&draft_name).is_some() {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "draft 已存在" }),
                     );
@@ -1551,10 +2174,9 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(request, 201, &serde_json::json!({ "ok": true }))
+                responder.answer( 201, &serde_json::json!({ "ok": true }))
             }
             (Method::Put, Some("body")) => {
-                let body = read_body(&mut request)?;
                 let mut edited: Experience = serde_json::from_str(&body)
                     .map_err(|error| format!("invalid experience body: {error}"))?;
                 validate_editable_body(&edited)?;
@@ -1565,8 +2187,7 @@ fn handle_api(
                     .map(|experience| experience.status)
                     .ok_or_else(|| format!("experience '{name}' not found"))?;
                 if current != ExperienceStatus::Draft {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "仅 draft 可编辑；请先 POST /draft" }),
                     );
@@ -1592,14 +2213,12 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(request, 200, &serde_json::json!({ "ok": true }))
+                responder.answer( 200, &serde_json::json!({ "ok": true }))
             }
             (Method::Post, Some("adopt")) => {
-                let body = read_body(&mut request)?;
                 let actor = request_actor(&body);
                 let Some(original_name) = name.strip_suffix("__draft") else {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "adopt 目标必须是 __draft" }),
                     );
@@ -1610,15 +2229,13 @@ fn handle_api(
                     .cloned()
                     .ok_or_else(|| format!("draft '{name}' not found"))?;
                 if draft.status != ExperienceStatus::Draft {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({ "error": "仅 Draft 状态可 adopt" }),
                     );
                 }
                 if store.get(original_name).is_none() {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         404,
                         &serde_json::json!({ "error": format!("原经验 '{original_name}' 不存在") }),
                     );
@@ -1647,10 +2264,9 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(request, 200, &serde_json::json!({ "ok": true }))
+                responder.answer( 200, &serde_json::json!({ "ok": true }))
             }
             (Method::Post, Some(pin_action @ ("pin" | "unpin"))) => {
-                let body = read_body(&mut request)?;
                 let actor = request_actor(&body);
                 let mut store = app.store.lock().unwrap();
                 if pin_action == "pin" {
@@ -1679,10 +2295,9 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(request, 200, &serde_json::json!({"ok": true}))
+                responder.answer( 200, &serde_json::json!({"ok": true}))
             }
             (Method::Patch, Some("status")) => {
-                let body = read_body(&mut request)?;
                 let value: serde_json::Value =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 let verb = value
@@ -1700,8 +2315,7 @@ fn handle_api(
                     "revalidate" => QualificationAction::Revalidate,
                     "validate" => QualificationAction::Validate,
                     other => {
-                        return json_response(
-                            request,
+                        return responder.answer(
                             400,
                             &serde_json::json!({
                                 "error": format!("unknown status action '{other}'")
@@ -1716,8 +2330,7 @@ fn handle_api(
                 if matches!(action, QualificationAction::ForceActivate)
                     && reason.as_deref().map(str::trim).unwrap_or_default().is_empty()
                 {
-                    return json_response(
-                        request,
+                    return responder.answer(
                         400,
                         &serde_json::json!({
                             "error": "force_activate requires a 'reason'"
@@ -1737,8 +2350,7 @@ fn handle_api(
                     || matches!(action, QualificationAction::Revalidate)
                 {
                     if let Err(issues) = qualify(&experience, &resolve_default_source) {
-                        return json_response(
-                            request,
+                        return responder.answer(
                             400,
                             &serde_json::json!({ "error": "qualification failed", "issues": issues }),
                         );
@@ -1784,17 +2396,16 @@ fn handle_api(
                         recorded_at: l1_now_secs(),
                     },
                 );
-                json_response(
-                    request,
+                responder.answer(
                     200,
                     &serde_json::json!({ "ok": true, "status": next }),
                 )
             }
-            _ => method_not_allowed(request),
+            _ => method_not_allowed(&mut responder),
         };
     }
 
-    not_found(request, format!("unknown api path: {url}"))
+    not_found(&mut responder, format!("unknown api path: {url}"))
 }
 
 fn summary(experience: &Experience, pinned: bool, scope: Option<&str>) -> serde_json::Value {
@@ -2211,8 +2822,20 @@ fn l1_sink_session(app: &App, sessions: &SessionStore, session_id: &str) {
     let mut store = app.store.lock().unwrap();
     let existing = store.get(&name).is_some();
     let distiller: Box<dyn L1Distiller> = l1_distiller_for(app, &session);
+    let distiller_label = if distiller.accepts_dirty() { "llm" } else { "deterministic" };
     let ledger_outcome = match sink_once(&round, true, existing, &mut store, distiller.as_ref()) {
         Ok(None) => {
+            store.set_candidate_origin(
+                &name,
+                CandidateOrigin {
+                    task_signature: experience_core::experience::learning_l1::task_signature(
+                        &round.task,
+                    ),
+                    session_id: Some(session_id.to_string()),
+                    distiller: distiller_label.to_string(),
+                    recorded_at: l1_now_secs(),
+                },
+            );
             persist(app, &store);
             eprintln!("l1 sink: wrote candidate {name} (session {session_id})");
             "written".to_string()
@@ -2264,7 +2887,7 @@ fn l1_distiller_for(app: &App, session: &Session) -> Box<dyn L1Distiller> {
 /// Resolve a concrete LLM compiler (env override or a managed agent), used by
 /// L1 dirty rounds and by reference promotion (Stage A).
 fn llm_distiller_available(app: &App, agent_id: Option<&str>) -> Option<CodexLlmDistiller> {
-    if !llm_compiler_enabled() {
+    if !llm_compiler_setting(app) {
         return None;
     }
     resolve_agent_distiller(app, agent_id).ok().map(|(distiller, _)| distiller)
@@ -2343,14 +2966,21 @@ fn promote_warnings_with(fallback_agent: bool) -> Vec<&'static str> {
     warnings
 }
 
-fn llm_compiler_enabled() -> bool {
-    matches!(
-        std::env::var("EXPERIENCE_LLM_COMPILER")
-            .ok()
-            .map(|value| value.to_lowercase())
-            .as_deref(),
-        Some("on" | "enabled" | "1" | "true")
-    )
+/// Resolve the LLM compiler flag: explicit env var wins, otherwise the
+/// file-backed setting (S4).
+fn llm_compiler_setting(app: &App) -> bool {
+    match std::env::var("EXPERIENCE_LLM_COMPILER").ok() {
+        Some(value) => injection_policy_from(Some(value.as_str())),
+        None => app.settings.lock().unwrap().llm_compiler,
+    }
+}
+
+/// Resolve the injection policy: explicit env var wins, otherwise settings.
+fn injection_policy_setting(app: &App) -> bool {
+    match std::env::var("EXPERIENCE_INJECTION_POLICY").ok() {
+        Some(value) => injection_policy_from(Some(value.as_str())),
+        None => app.settings.lock().unwrap().injection_policy,
+    }
 }
 
 /// One-shot LLM compiler: input is the pruned success-path summary (task +
@@ -2532,6 +3162,8 @@ struct L3RunReport {
     completed_step_ids: Vec<String>,
     verified_state: Vec<String>,
     detail: String,
+    /// Instantiated backup root for this run, when a backup was configured.
+    backup_root: Option<String>,
 }
 
 /// L3 v2 task entry orchestrator (rulings 2026-09-09):
@@ -2590,6 +3222,20 @@ fn l3_entry(
             );
             continue;
         }
+        // S3 Gate 3/Gate 4/Gate 5: the verdict must be observable, and a
+        // dry-run must replay cleanly before we touch the real workspace.
+        // S1-a/S1-d: policy denial is NOT a preflight skip — the candidate is
+        // still selected and the execution is recorded (`invalid`, before any
+        // side effect). That keeps the verdict auditable per experience and
+        // lets the delegation reason explain the refusal.
+        let effective_policy = effective_policy_for(app, candidate, session_scope.as_deref());
+        if let Some(reason) = l3_gate_check(candidate, workspace, &effective_policy) {
+            push_audit(&mut skip_audit, &format!("{}:{reason}", candidate.name));
+            continue;
+        }
+        if let Some(denied) = l3_policy_blocks(&effective_policy, candidate) {
+            push_audit(&mut skip_audit, &format!("{}:{denied}", candidate.name));
+        }
         runnable.push(candidate);
     }
 
@@ -2597,7 +3243,14 @@ fn l3_entry(
     let mut run_report: Option<L3RunReport> = None;
     match l3_pick_unique_best(&runnable) {
         Ok(experience) => {
-            let report = l3_run_workflow(experience, workspace);
+            let effective_policy = effective_policy_for(app, experience, session_scope.as_deref());
+            let report = l3_run_workflow(
+                experience,
+                workspace,
+                &effective_policy,
+                Some((&app.home, session_id)),
+                &app.home,
+            );
             append_l1_ledger(
                 app,
                 &L1LedgerRecord {
@@ -2609,10 +3262,20 @@ fn l3_entry(
                     action: Some("execute".to_string()),
                     from: None,
                     to: None,
-                    reason: if report.detail.is_empty() {
-                        None
-                    } else {
-                        Some(l3_cap(&report.detail, 200))
+                    reason: {
+                        let mut reason = l3_cap(&report.detail, 160);
+                        if let Some(root) = &report.backup_root {
+                            if !reason.is_empty() {
+                                reason.push(';');
+                            }
+                            reason.push_str("backup=");
+                            reason.push_str(&l3_cap(root, 120));
+                        }
+                        if reason.is_empty() {
+                            None
+                        } else {
+                            Some(reason)
+                        }
                     },
                     outcome: report.outcome.clone(),
                     recorded_at: l1_now_secs(),
@@ -2629,7 +3292,16 @@ fn l3_entry(
     }
 
     let delegated_task = match &run_report {
-        Some(report) => delegation_text(task, &report.completed_step_ids, &report.verified_state),
+        Some(report) => {
+            let mut text =
+                delegation_text(task, &report.completed_step_ids, &report.verified_state);
+            if let Some(root) = &report.backup_root {
+                text.push_str(&format!(
+                    "\n[复原本轮文件改动] POST /api/backups/{session_id}/restore body {{\"snapshot\":\"{root}\"}}"
+                ));
+            }
+            text
+        }
         None => task.to_string(),
     };
     let delegate_reason = match &executed {
@@ -2643,7 +3315,7 @@ fn l3_entry(
 
     // D4 injection policy: default OFF. Only an explicit user policy enables
     // references; every decision is audited (injected/omitted + reason).
-    let (inject_outcome, inject_reason, reference_text) = if injection_policy_enabled() {
+    let (inject_outcome, inject_reason, reference_text) = if injection_policy_setting(app) {
         let experiences_text = l3_reference_text(&matched, 600);
         let reference_entries: Vec<ReferenceEntry> = {
             let store = app.store.lock().unwrap();
@@ -2831,7 +3503,23 @@ fn l3_locally_runnable(experience: &Experience) -> bool {
         && experience
             .workflow
             .iter()
-            .all(|step| step.action == "write_file")
+            .all(|step| is_locally_executable_action(&step.action))
+}
+
+/// S1-b: actions the shared embedded executor implements.
+fn is_locally_executable_action(action: &str) -> bool {
+    matches!(
+        action,
+        "write_file"
+            | "append_file"
+            | "read_file"
+            | "mkdir"
+            | "copy_file"
+            | "move_file"
+            | "delete_file"
+            | "exec"
+            | "exec_command"
+    )
 }
 
 fn l3_preconditions_pass(experience: &Experience, workspace: &Path) -> bool {
@@ -2839,8 +3527,10 @@ fn l3_preconditions_pass(experience: &Experience, workspace: &Path) -> bool {
         .preconditions
         .iter()
         .all(|predicate| {
-            evaluate_predicate(&predicate.key, &predicate.expected, workspace)
-                == TruthValue::True
+            // S3 Gate 3: an unregistered precondition is Unknown, not "met".
+            state_source::observable(&predicate.key)
+                && evaluate_predicate(&predicate.key, &predicate.expected, workspace)
+                    == TruthValue::True
         })
 }
 
@@ -2868,104 +3558,323 @@ fn l3_pick_unique_best<'a>(
     }
 }
 
-fn l3_run_workflow(experience: &Experience, workspace: &Path) -> L3RunReport {
-    let mut completed_step_ids = Vec::new();
-    for (index, step) in experience.workflow.iter().enumerate() {
-        match l3_execute_step(step, workspace) {
-            Ok(_) => {
-                completed_step_ids.push(format!("{}#{}", step.action, index));
-            }
-            Err((outcome, detail)) => {
-                return L3RunReport {
-                    outcome,
-                    completed_step_ids,
-                    verified_state: l3_verified_state(experience, workspace),
-                    detail,
-                };
-            }
-        }
-    }
-    let verified_state = l3_verified_state(experience, workspace);
-    if verified_state.len() == experience.postconditions.len() {
-        L3RunReport {
-            outcome: "success".to_string(),
-            completed_step_ids,
-            verified_state,
-            detail: String::new(),
-        }
-    } else {
-        L3RunReport {
-            outcome: "misfire".to_string(),
-            completed_step_ids,
-            verified_state,
-            detail: "postconditions not satisfied after workflow".to_string(),
-        }
+/// Effective capability policy for one experience: its own scope owns the
+/// policy; the session scope is the fallback; otherwise the store default.
+fn effective_policy_for(
+    app: &App,
+    experience: &Experience,
+    session_scope: Option<&str>,
+) -> CapabilityPolicy {
+    let store = app.store.lock().unwrap();
+    match store.scope_of(&experience.name) {
+        Some(scope) => store.policy_for_scope(Some(scope)),
+        None => store.policy_for_scope(session_scope),
     }
 }
 
-fn l3_execute_step(
-    step: &experience_core::domain::experience::WorkflowStep,
+/// First workflow action refused by `policy`, formatted for audit as
+/// `policy_denied:<action>:<family>:<reason>` (never contains step args).
+fn l3_policy_blocks(policy: &CapabilityPolicy, experience: &Experience) -> Option<String> {
+    for step in &experience.workflow {
+        if let Err(decision) = policy.check(&step.action) {
+            return Some(format!(
+                "policy_denied:{}:{}:{}",
+                decision.action, decision.family, decision.reason
+            ));
+        }
+    }
+    None
+}
+
+/// S3 Gate 3/4/5 for one candidate:
+/// - every precondition/postcondition must bind to a registered state source;
+/// - every step must be locally executable;
+/// - the workflow must replay cleanly in a scratch dry-run.
+fn l3_gate_check(
+    experience: &Experience,
     workspace: &Path,
-) -> Result<String, (String, String)> {
-    match step.action.as_str() {
-        "write_file" => {
-            let path = step
-                .args
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    (
-                        "invalid".to_string(),
-                        "write_file: missing string arg 'path'".to_string(),
-                    )
-                })?;
-            let content = step
-                .args
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    (
-                        "invalid".to_string(),
-                        "write_file: missing string arg 'content'".to_string(),
-                    )
-                })?;
-            let target = safe_join(workspace, path).map_err(|error| {
-                (
-                    "execution_error".to_string(),
-                    format!("write_file: path guard rejected: {error}"),
-                )
-            })?;
-            if let Some(parent) = target.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent).map_err(|error| {
-                        (
-                            "execution_error".to_string(),
-                            format!("write_file: cannot create parent dir: {error}"),
-                        )
-                    })?;
+    policy: &CapabilityPolicy,
+) -> Option<String> {
+    for predicate in experience.preconditions.iter().chain(experience.postconditions.iter()) {
+        if !state_source::observable(&predicate.key) {
+            return Some(format!("unobservable_verdict:{}", predicate.key));
+        }
+    }
+    if let Some(step) = experience
+        .workflow
+        .iter()
+        .find(|step| !is_locally_executable_action(&step.action))
+    {
+        return Some(format!("unexecutable_step:{}", step.action));
+    }
+    let scratch = std::env::temp_dir().join(format!(
+        "exp-l3-dryrun-{}-{}",
+        std::process::id(),
+        l1_now_secs()
+    ));
+    if std::fs::create_dir_all(&scratch).is_err() {
+        return Some("dryrun_setup_failed".to_string());
+    }
+    let result = {
+        let mut context = StepContext::new(workspace, policy).with_scratch(&scratch);
+        let mut failure = None;
+        for step in &experience.workflow {
+            // Denials are recorded as `invalid` by the real run; the dry-run
+            // only certifies that the step's shape is replayable.
+            if policy.check(&step.action).is_err() {
+                continue;
+            }
+            // Exec steps are shape-checked by the executor and policy-checked
+            // above; the dry-run must never spawn, so it only asserts that the
+            // step is something the executor knows how to validate.
+            if step.action == "exec" || step.action == "exec_command" {
+                continue;
+            }
+            if let Err(error) = exec_step(&mut context, step) {
+                failure = Some(format!("dryrun_failed:{}", error.detail));
+                break;
+            }
+        }
+        failure
+    };
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+/// Directory-id guard for backup listing/restore (no separators, no `..`).
+fn valid_backup_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+/// Whether a single requested capability fits inside `policy` (session
+/// `capabilities` may only narrow the scope policy).
+fn capability_within_policy(policy: &CapabilityPolicy, capability: &str) -> bool {
+    match capability_family(capability) {
+        Some("fs_read") => policy.allows("read_file"),
+        Some("fs_write") => policy.allows("write_file"),
+        Some("fs_delete") => policy.allows("delete_file"),
+        // Legacy shell strings need the explicit opt-in even when the exec
+        // family is in allowlist mode (Tier 2 legacy_shell rule).
+        Some("exec") if capability == "exec_command" => {
+            policy.allows("exec") && policy.exec.allow_legacy_shell
+        }
+        Some("exec") => policy.allows("exec"),
+        Some("network") => policy.network.mode != "off",
+        // Reserved channels (computer_use) are contract-only for now.
+        _ => true,
+    }
+}
+
+/// Compact, secret-free policy summary for ledger `reason` fields.
+fn policy_summary(policy: &CapabilityPolicy) -> String {
+    format!(
+        "fs_read={}(max={});fs_write={};fs_delete={};exec={};network={}",
+        policy.fs_read.enabled,
+        policy.read_max_bytes(),
+        policy.fs_write,
+        policy.fs_delete,
+        policy.exec.mode,
+        policy.network.mode
+    )
+}
+
+/// Audit one policy mutation (set/cleared) into the shared ledger.
+fn append_policy_ledger(
+    app: &App,
+    scope: &str,
+    actor: &str,
+    action: &str,
+    reason: Option<&str>,
+) {
+    append_l1_ledger(
+        app,
+        &L1LedgerRecord {
+            record_type: "policy_updated".to_string(),
+            candidate_name: scope.to_string(),
+            session_id: None,
+            thread_id: None,
+            trace_version: None,
+            action: Some(action.to_string()),
+            from: None,
+            to: None,
+            reason: Some(match reason {
+                Some(reason) => format!("actor={actor};{reason}"),
+                None => format!("actor={actor}"),
+            }),
+            outcome: "completed".to_string(),
+            recorded_at: l1_now_secs(),
+        },
+    );
+}
+
+fn l3_run_workflow(
+    experience: &Experience,
+    workspace: &Path,
+    policy: &CapabilityPolicy,
+    backup: Option<(&Path, &str)>,
+    app_home: &Path,
+) -> L3RunReport {
+    // S1-c: each run gets its own backup root; the manifest is always written
+    // so the UI can offer "undo this run" even when nothing changed.
+    let backup_root: Option<PathBuf> = backup.map(|(home, session_id)| {
+        home.join("backups")
+            .join(session_id)
+            .join(format!("run-{}", l1_now_secs()))
+    });
+    let mut entries: Vec<BackupEntry> = Vec::new();
+    let mut completed_step_ids = Vec::new();
+    let mut exec_results: BTreeMap<String, ProcessEvidence> = BTreeMap::new();
+    let mut exec_notes: Vec<String> = Vec::new();
+    let mut failure: Option<(String, String)> = None;
+    {
+        let mut context = StepContext::new(workspace, policy);
+        context = context.with_run_root(app_home.join("run"));
+        if let Some(root) = backup_root.as_deref() {
+            context = context.with_backup(root, &mut entries);
+        }
+        for (index, step) in experience.workflow.iter().enumerate() {
+            match exec_step(&mut context, step) {
+                Ok(execution) => {
+                    let id = format!("{}#{}", step.action, index);
+                    exec_results.insert(
+                        id.clone(),
+                        ProcessEvidence {
+                            exit_code: execution.exit_code,
+                            stdout: execution.stdout.clone(),
+                        },
+                    );
+                    completed_step_ids.push(id);
+                    if !execution.stderr.is_empty() {
+                        exec_notes.push(format!(
+                            "stderr[{}]={}",
+                            index,
+                            execution
+                                .stderr
+                                .chars()
+                                .take(120)
+                                .collect::<String>()
+                        ));
+                    }
+                    if !execution.stdout.is_empty() {
+                        exec_notes.push(format!(
+                            "stdout[{}]={}",
+                            index,
+                            execution
+                                .stdout
+                                .chars()
+                                .take(120)
+                                .collect::<String>()
+                        ));
+                    }
+                }
+                Err(error) => {
+                    failure = Some((error.outcome, error.detail));
+                    break;
                 }
             }
-            std::fs::write(&target, content).map_err(|error| {
-                (
-                    "execution_error".to_string(),
-                    format!("write_file: failed to write {}: {error}", target.display()),
-                )
-            })?;
-            Ok(format!("wrote {path}"))
         }
-        other => Err((
-            "invalid".to_string(),
-            format!("unsupported workflow action: '{other}'"),
-        )),
+    }
+    let (outcome, mut detail) = match failure {
+        Some((failed_outcome, failed_detail)) => (failed_outcome, failed_detail),
+        None => {
+            let verified = l3_verified_state(experience, workspace, &exec_results);
+            if verified.len() == experience.postconditions.len() {
+                ("success".to_string(), String::new())
+            } else {
+                (
+                    "misfire".to_string(),
+                    "postconditions not satisfied after workflow".to_string(),
+                )
+            }
+        }
+    };
+    if let Some(root) = backup_root.as_deref() {
+        if let Err(error) =
+            write_backup_manifest(root, workspace, backup.map(|(_, id)| id), &entries)
+        {
+            if detail.is_empty() {
+                detail = format!("backup manifest failed: {error}");
+            }
+        }
+    }
+    if !exec_notes.is_empty() {
+        let note = exec_notes.join(";");
+        detail = if detail.is_empty() {
+            note
+        } else {
+            format!("{detail};{note}")
+        };
+    }
+    L3RunReport {
+        outcome,
+        completed_step_ids,
+        verified_state: l3_verified_state(experience, workspace, &exec_results),
+        detail,
+        backup_root: backup_root.map(|path| path.to_string_lossy().to_string()),
     }
 }
 
-fn l3_verified_state(experience: &Experience, workspace: &Path) -> Vec<String> {
+/// Process evidence captured for one completed step (S2): consumed by the
+/// `process.*` predicates so a build/test verdict is evidence, not assertion.
+#[derive(Debug, Clone, Default)]
+struct ProcessEvidence {
+    exit_code: Option<i32>,
+    stdout: String,
+}
+
+/// Evaluate one postcondition, consulting process evidence after local probes.
+fn l3_predicate_truth(
+    key: &str,
+    expected: &serde_json::Value,
+    workspace: &Path,
+    exec_results: &BTreeMap<String, ProcessEvidence>,
+) -> TruthValue {
+    // S3 Gate 5: a verdict that is not produced by a registered source is
+    // Unknown — never True, never permission to claim completion.
+    if !state_source::observable(key) {
+        return TruthValue::Unknown;
+    }
+    if let Some(rest) = key.strip_prefix("process.exit_code:") {
+        return match exec_results.get(rest).and_then(|entry| entry.exit_code) {
+            Some(code) => match expected.as_i64() {
+                Some(want) if want == i64::from(code) => TruthValue::True,
+                Some(_) => TruthValue::False,
+                None => TruthValue::Unknown,
+            },
+            None => TruthValue::Unknown,
+        };
+    }
+    if let Some(rest) = key.strip_prefix("process.stdout_contains:") {
+        let (step, needle) = (rest, expected.as_str().unwrap_or(""));
+        if step.is_empty() || needle.is_empty() {
+            return TruthValue::Unknown;
+        }
+        let Some(entry) = exec_results.get(step) else {
+            return TruthValue::Unknown;
+        };
+        return if entry.stdout.contains(needle) {
+            TruthValue::True
+        } else {
+            TruthValue::False
+        };
+    }
+    evaluate_predicate(key, expected, workspace)
+}
+
+fn l3_verified_state(
+    experience: &Experience,
+    workspace: &Path,
+    exec_results: &BTreeMap<String, ProcessEvidence>,
+) -> Vec<String> {
     experience
         .postconditions
         .iter()
         .filter(|predicate| {
-            evaluate_predicate(&predicate.key, &predicate.expected, workspace)
+            l3_predicate_truth(&predicate.key, &predicate.expected, workspace, exec_results)
                 == TruthValue::True
         })
         .map(|predicate| format!("{}={}", predicate.key, l3_value_text(&predicate.expected)))
@@ -2981,10 +3890,6 @@ fn l3_value_text(value: &serde_json::Value) -> String {
 
 /// Injection policy reads `EXPERIENCE_INJECTION_POLICY`; anything but
 /// on/enabled/1/true stays OFF (D4 default: no reference injection).
-fn injection_policy_enabled() -> bool {
-    injection_policy_from(std::env::var("EXPERIENCE_INJECTION_POLICY").ok().as_deref())
-}
-
 fn injection_policy_from(value: Option<&str>) -> bool {
     matches!(
         value.map(str::to_lowercase).as_deref(),
@@ -3649,16 +4554,17 @@ fn json_response(request: Request, status: u16, value: &serde_json::Value) -> Re
     request.respond(response).map_err(|error| error.to_string())
 }
 
-fn not_found(request: Request, message: String) -> Result<(), String> {
-    json_response(request, 404, &serde_json::json!({"error": message}))
+/// 400 response for validation/policy/serialization failures.
+fn bad_request(request: Request, message: String) -> Result<(), String> {
+    json_response(request, 400, &serde_json::json!({ "error": message }))
 }
 
-fn method_not_allowed(request: Request) -> Result<(), String> {
-    json_response(
-        request,
-        405,
-        &serde_json::json!({"error": "method not allowed"}),
-    )
+fn not_found(responder: &mut Responder<'_>, message: String) -> Result<(), String> {
+    responder.answer(404, &serde_json::json!({"error": message}))
+}
+
+fn method_not_allowed(responder: &mut Responder<'_>) -> Result<(), String> {
+    responder.answer(405, &serde_json::json!({"error": "method not allowed"}))
 }
 
 fn read_body(request: &mut Request) -> Result<String, String> {
@@ -3919,7 +4825,7 @@ mod tests {
     }
 
     #[test]
-    fn l3_locally_runnable_rejects_exec_workflow() {
+    fn l3_locally_runnable_accepts_policy_known_actions_only() {
         let write = probe_file_experience("active");
         assert!(l3_locally_runnable(&write));
         let exec: Experience = serde_json::from_value(serde_json::json!({
@@ -3937,14 +4843,29 @@ mod tests {
             "status": "active"
         }))
         .unwrap();
-        assert!(!l3_locally_runnable(&exec));
+        // S2: exec is an executor-known action; the *policy* is what decides
+        // whether it may run (it stays off by default).
+        assert!(l3_locally_runnable(&exec));
+        let unknown: Experience = serde_json::from_value(serde_json::json!({
+            "name": "unknown_only",
+            "trigger": {"tool": "exec_command", "command_pattern": "run probe"},
+            "preconditions": [],
+            "workflow": [{"action": "mystery_tool", "args": {}}],
+            "postconditions": [{"key": "file:probe.txt.exists", "expected": true}],
+            "verification": [],
+            "failure_policy": "stop_and_report",
+            "undo": "unsupported",
+            "status": "active"
+        }))
+        .unwrap();
+        assert!(!l3_locally_runnable(&unknown));
     }
 
     #[test]
     fn l3_workflow_success_writes_and_verifies_postconditions() {
         let dir = l3_temp_dir("success");
         let experience = probe_file_experience("active");
-        let report = l3_run_workflow(&experience, &dir);
+        let report = l3_run_workflow(&experience, &dir, &CapabilityPolicy::default(), None, &dir);
         assert_eq!(report.outcome, "success");
         assert_eq!(report.completed_step_ids, vec!["write_file#0".to_string()]);
         assert!(report.verified_state.iter().any(|s| s == "file:probe.txt.exists=true"));
@@ -3961,7 +4882,7 @@ mod tests {
         let mut experience = probe_file_experience("active");
         experience.postconditions[1].expected =
             serde_json::json!("DIFFERENT_EXPECTED_CONTENT");
-        let report = l3_run_workflow(&experience, &dir);
+        let report = l3_run_workflow(&experience, &dir, &CapabilityPolicy::default(), None, &dir);
         assert_eq!(report.outcome, "misfire");
         assert!(report.detail.contains("postconditions"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3985,9 +4906,132 @@ mod tests {
             "status": "active"
         }))
         .unwrap();
-        let report = l3_run_workflow(&exec, &dir);
+        let report = l3_run_workflow(&exec, &dir, &CapabilityPolicy::default(), None, &dir);
         assert_eq!(report.outcome, "invalid");
-        assert!(report.detail.contains("unsupported workflow action"));
+        assert!(
+            report.detail.contains("policy denied step 'exec_command'"),
+            "detail: {}",
+            report.detail
+        );
+        assert!(report.detail.contains("exec=off"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn l3_workflow_denies_write_when_policy_disallows_writes() {
+        let dir = l3_temp_dir("policy-write");
+        let experience = probe_file_experience("active");
+        let mut policy = CapabilityPolicy::default();
+        policy.fs_write = experience_core::policy::FS_WRITE_DENY.to_string();
+        let report = l3_run_workflow(&experience, &dir, &policy, None, &dir);
+        assert_eq!(report.outcome, "invalid");
+        assert!(report.detail.contains("fs_write=deny"), "detail: {}", report.detail);
+        assert!(report.completed_step_ids.is_empty());
+        // The refusal happens before any side effect.
+        assert!(!dir.join("probe.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn l3_policy_blocks_reports_family_and_reason() {
+        let mut delete: Experience = probe_file_experience("active");
+        delete.workflow = vec![serde_json::from_value(serde_json::json!({
+            "action": "delete_file",
+            "args": {"path": "probe.txt"}
+        }))
+        .unwrap()];
+        let reason = l3_policy_blocks(&CapabilityPolicy::default(), &delete).unwrap();
+        assert!(reason.starts_with("policy_denied:delete_file:fs_delete"), "{reason}");
+        assert!(reason.contains("fs_delete=deny"));
+
+        let policy = CapabilityPolicy::default();
+        assert!(!policy.allows("delete_file"));
+        assert!(policy.allows("read_file"));
+    }
+
+    #[test]
+    fn session_capability_must_fit_scope_policy() {
+        let mut policy = CapabilityPolicy::default();
+        assert!(capability_within_policy(&policy, "write_file"));
+        assert!(capability_within_policy(&policy, "read_file"));
+        assert!(!capability_within_policy(&policy, "exec_command"));
+        assert!(!capability_within_policy(&policy, "delete_file"));
+        // Reserved channels stay contract-only (allowed) for now.
+        assert!(capability_within_policy(&policy, "computer_use"));
+
+        // allowlist mode still refuses legacy shell unless explicitly opted in.
+        policy.exec.mode = experience_core::policy::EXEC_ALLOWLIST.to_string();
+        policy.exec.allow = vec!["git".to_string()];
+        assert!(!capability_within_policy(&policy, "exec_command"));
+        assert!(capability_within_policy(&policy, "exec"));
+        policy.exec.allow_legacy_shell = true;
+        assert!(capability_within_policy(&policy, "exec_command"));
+
+        policy.fs_write = experience_core::policy::FS_WRITE_DENY.to_string();
+        assert!(!capability_within_policy(&policy, "write_file"));
+        assert!(capability_within_policy(&policy, "read_file"));
+    }
+
+    #[test]
+    fn policy_summary_is_secret_free_and_stable() {
+        let summary = policy_summary(&CapabilityPolicy::default());
+        assert!(summary.contains("fs_write=workspace_only"));
+        assert!(summary.contains("exec=off"));
+        assert!(summary.contains(&format!(
+            "max={}",
+            experience_core::policy::DEFAULT_READ_MAX_BYTES
+        )));
+    }
+
+    #[test]
+    fn s3_gate_rejects_unobservable_verdicts() {
+        let dir = l3_temp_dir("s3-unobservable");
+        let mut experience = probe_file_experience("active");
+        experience.postconditions = vec![serde_json::from_value(
+            serde_json::json!({"key": "mood.is_happy", "expected": true}),
+        )
+        .unwrap()];
+        let reason = l3_gate_check(&experience, &dir, &CapabilityPolicy::default())
+            .expect("unregistered predicate must be refused");
+        assert!(
+            reason.starts_with("unobservable_verdict:"),
+            "{reason}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s3_gate_accepts_registered_predicates_and_does_not_touch_workspace() {
+        let dir = l3_temp_dir("s3-observable");
+        let experience = probe_file_experience("active");
+        let reason = l3_gate_check(&experience, &dir, &CapabilityPolicy::default());
+        assert!(reason.is_none(), "{reason:?}");
+        // Gate 4: the dry-run replayed into scratch, never the workspace.
+        assert!(!dir.join("probe.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s3_gate_supports_new_predicate_families() {
+        let dir = l3_temp_dir("s3-families");
+        let mut experience = probe_file_experience("active");
+        experience.postconditions = vec![
+            serde_json::from_value(
+                serde_json::json!({"key": "file:probe.txt.sha256", "expected": "abc"}),
+            )
+            .unwrap(),
+            serde_json::from_value(
+                serde_json::json!({"key": "file:probe.txt.size", "expected": 1}),
+            )
+            .unwrap(),
+            serde_json::from_value(
+                serde_json::json!({"key": "process.exit_code:exec#0", "expected": 0}),
+            )
+            .unwrap(),
+        ];
+        assert!(
+            l3_gate_check(&experience, &dir, &CapabilityPolicy::default()).is_none()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

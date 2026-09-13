@@ -86,6 +86,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 | docs/ui-module-spec.md · docs/ui-project-plan.md | 管理界面规格与实施计划 |
 | docs/rerun-matrix.md | 全部真机/回归复跑矩阵 |
 | docs/productization-security-execution-plan.md | 安全边界与执行/验证面产品化规划 |
+| docs/learning-reuse-contract.md | **学习与复用契约（可移植声明）**：L1 回流、复用门控、已知妥协与扩展点、移植清单 |
+| docs/computer-use-adapter-contract.md | Computer Use 适配器契约（预留通道，实现冻结） |
+| docs/scale-index-design.md | 规模索引面设计（含 1 万/100 万量级的取舍声明） |
 
 ## 许可与上游
 

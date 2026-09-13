@@ -6,7 +6,19 @@
 //! executable bodies.
 
 /// Canonical capability names the Experience executor understands.
-pub const CANONICAL_TOOLS: &[&str] = &["exec_command", "write_file", "read_file"];
+/// Tier1 file actions (`append_file`, `mkdir`, `copy_file`, `move_file`,
+/// `delete_file`) are already part of the vocabulary so the policy layer can
+/// gate them; the executor implementations land with Stage S1-b.
+pub const CANONICAL_TOOLS: &[&str] = &[
+    "exec_command",
+    "write_file",
+    "read_file",
+    "append_file",
+    "mkdir",
+    "copy_file",
+    "move_file",
+    "delete_file",
+];
 
 /// Reserved capability identifiers: contract-only channels that are NOT
 /// executable by the embedded runtime yet (Stage C4). `computer_use` is the
@@ -39,6 +51,11 @@ mod tests {
         assert!(is_known_capability("write_file"));
         assert!(is_known_capability("read_file"));
         assert!(is_known_capability("computer_use"));
+        assert!(is_known_capability("append_file"));
+        assert!(is_known_capability("mkdir"));
+        assert!(is_known_capability("copy_file"));
+        assert!(is_known_capability("move_file"));
+        assert!(is_known_capability("delete_file"));
         assert!(!is_known_capability("mystery_tool"));
     }
 }

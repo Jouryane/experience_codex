@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>设置 - Experience</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/pages/settings.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="app-sidebar">
+        <div class="app-brand">Experience</div>
+        <nav class="app-nav">
+          <a href="index.html" class="nav-item" data-nav="sessions">
+            <span class="nav-icon">▸</span> 任务
+          </a>
+          <a href="experiences.html" class="nav-item" data-nav="experiences">
+            <span class="nav-icon">◇</span> 经验库
+          </a>
+          <a href="absorb.html" class="nav-item" data-nav="absorb">
+            <span class="nav-icon">◈</span> 经验吸收
+          </a>
+          <a href="agents.html" class="nav-item" data-nav="agents">
+            <span class="nav-icon">◯</span> 助手
+          </a>
+          <a href="settings.html" class="nav-item active" data-nav="settings">
+            <span class="nav-icon">⚙</span> 设置
+          </a>
+          <a href="audit.html" class="nav-item" data-nav="audit">
+            <span class="nav-icon">▢</span> 操作记录
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="health" class="health-dot"></span>
+          <span id="health-text" class="text-sm text-muted">检查中…</span>
+        </div>
+      </aside>
+
+      <main class="app-main">
+        <div class="page-header-row">
+          <h1 class="page-header">设置</h1>
+          <span id="settings-env-note" class="text-sm text-muted">
+            环境变量优先于此处设置
+          </span>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>能力策略</h2>
+            <span class="text-sm text-muted">scope 级策略；留空 = 继承全局默认</span>
+          </div>
+          <div class="settings-row">
+            <label for="policy-scope">Scope</label>
+            <input id="policy-scope" placeholder="__global__ 或 scene-名称" value="__global__" />
+            <button id="policy-load" class="btn">读取</button>
+          </div>
+          <div class="settings-grid">
+            <div class="settings-field">
+              <label for="policy-fs-write">文件写入</label>
+              <select id="policy-fs-write">
+                <option value="workspace_only">仅工作区</option>
+                <option value="deny">禁止</option>
+              </select>
+            </div>
+            <div class="settings-field">
+              <label for="policy-fs-delete">删除文件</label>
+              <select id="policy-fs-delete">
+                <option value="deny">禁止（默认）</option>
+                <option value="workspace_only">仅工作区（需备份）</option>
+              </select>
+            </div>
+            <div class="settings-field">
+              <label for="policy-exec-mode">命令执行</label>
+              <select id="policy-exec-mode">
+                <option value="off">关闭（默认）</option>
+                <option value="allowlist">白名单</option>
+              </select>
+            </div>
+            <div class="settings-field">
+              <label for="policy-exec-allow">允许的程序</label>
+              <input id="policy-exec-allow" placeholder="逗号分隔，如 git,python" />
+            </div>
+            <div class="settings-field">
+              <label for="policy-read-max">读取上限（字节）</label>
+              <input id="policy-read-max" type="number" value="20480" min="1" />
+            </div>
+            <div class="settings-field">
+              <label for="policy-read-grant">特殊许可（字节，可选）</label>
+              <input id="policy-read-grant" type="number" min="1" placeholder="如 1048576" />
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button id="policy-save" class="btn btn-primary">保存策略</button>
+            <button id="policy-clear" class="btn">清除该 scope（恢复继承）</button>
+          </div>
+          <div id="policy-status" class="text-sm text-muted"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>学习与复用</h2>
+          </div>
+          <div class="settings-row">
+            <label for="setting-compiler">LLM 编译器</label>
+            <input id="setting-compiler" type="checkbox" />
+            <span class="text-sm text-muted">脏轨迹/参考提升需要它</span>
+          </div>
+          <div class="settings-row">
+            <label for="setting-injection">参考注入</label>
+            <input id="setting-injection" type="checkbox" />
+            <span class="text-sm text-muted">命中未执行时注入“仅参考”上下文</span>
+          </div>
+          <div class="settings-row">
+            <label for="setting-undo-keep">保留快照数</label>
+            <input id="setting-undo-keep" type="number" min="1" max="200" value="20" />
+          </div>
+          <div class="settings-actions">
+            <button id="settings-save" class="btn btn-primary">保存</button>
+          </div>
+          <div id="settings-status" class="text-sm text-muted"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>撤销最近的经验执行</h2>
+            <button id="undo-refresh" class="btn">刷新</button>
+          </div>
+          <div id="undo-list" class="undo-list"></div>
+          <div id="undo-empty" class="text-sm text-muted hidden">暂无经验执行记录</div>
+        </section>
+      </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/layout.js"></script>
+    <script src="js/pages/settings.js"></script>
+  </body>
+</html>

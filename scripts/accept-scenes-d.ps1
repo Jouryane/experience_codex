@@ -1,7 +1,8 @@
 param(
     [string]$Codex = "D:\experience_codex\codex-main\codex-rs\target\debug\codex.exe",
     [string]$CodexHome = "D:\experience_codex\codex-main\.codex-exp-home",
-    [string]$Presets = "D:\experience_codex\experience-main\experiences\scenes\presets.json"
+    [string]$Presets = "D:\experience_codex\experience-main\experiences\scenes\presets.json",
+    [string]$Only = ""
 )
 # Scene group D real acceptance (3 codex sessions): the inner Action Gate
 # intercepts the agent's exec_command before dispatch and the experience
@@ -31,6 +32,7 @@ $scenes = @(
 
 $failures = 0
 foreach ($scene in $scenes) {
+    if ($Only -and $scene.id -ne $Only) { continue }
     $sceneHome = Join-Path $env:TEMP ("exp-scene-$($scene.id)-" + [guid]::NewGuid().ToString('N'))
     $ws = Join-Path $env:TEMP ("exp-scene-ws-$($scene.id)-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $sceneHome, $ws -Force | Out-Null
