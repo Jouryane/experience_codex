@@ -28,6 +28,8 @@ use crate::domain::action::ActionProposal;
 use crate::domain::experience::QualificationAction;
 use crate::domain::experience::Experience;
 use crate::domain::experience::ExperienceStatus;
+use crate::policy::CapabilityPolicy;
+use crate::policy::GLOBAL_SCOPE_KEY;
 use crate::domain::experience::SchemaIssue;
 
 /// Current envelope schema version.
@@ -92,6 +94,28 @@ pub struct StoreFile {
     /// Stage A: reference materials (never executable).
     #[serde(default)]
     pub references: BTreeMap<String, ReferenceEntry>,
+    /// Stage S1-a: per-scope capability policies (additive). The reserved key
+    /// `__global__` holds the default; missing scopes inherit the default.
+    #[serde(default)]
+    pub scope_policies: BTreeMap<String, CapabilityPolicy>,
+    /// S3.5 provenance: where an auto-learned experience came from. Kept out of
+    /// `Experience` so the domain object stays a pure compiled artifact and
+    /// hosts can attach their own provenance shapes.
+    #[serde(default)]
+    pub candidate_origins: BTreeMap<String, CandidateOrigin>,
+}
+
+/// Provenance for an auto-learned candidate (declaration-friendly: hosts may
+/// extend this struct without touching the domain model).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateOrigin {
+    /// Normalized task signature that produced the candidate.
+    pub task_signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// `deterministic` | `llm` | `reference` | `manual` (free-form label).
+    pub distiller: String,
+    pub recorded_at: u64,
 }
 
 impl Default for StoreFile {
@@ -105,6 +129,8 @@ impl Default for StoreFile {
             user_usage: BTreeMap::new(),
             user_confidence: BTreeMap::new(),
             references: BTreeMap::new(),
+            scope_policies: BTreeMap::new(),
+            candidate_origins: BTreeMap::new(),
         }
     }
 }
@@ -171,6 +197,11 @@ pub struct ExperienceStore {
     user_confidence: HashMap<String, f64>,
     /// Stage A reference materials by id.
     references: BTreeMap<String, ReferenceEntry>,
+    /// Stage S1-a: per-scope capability policies (reserved `__global__` key
+    /// holds the default; unknown scopes inherit it).
+    scope_policies: BTreeMap<String, CapabilityPolicy>,
+    /// S3.5 provenance by experience name (auto-learned candidates).
+    candidate_origins: BTreeMap<String, CandidateOrigin>,
     /// name -> position in `experiences`.
     by_name: HashMap<String, usize>,
     /// trigger tool -> active experience names (the matching surface index).
@@ -188,6 +219,8 @@ impl Default for ExperienceStore {
             user_usage: HashMap::new(),
             user_confidence: HashMap::new(),
             references: BTreeMap::new(),
+            scope_policies: BTreeMap::new(),
+            candidate_origins: BTreeMap::new(),
             by_name: HashMap::new(),
             active_by_tool: HashMap::new(),
         }
@@ -224,6 +257,8 @@ impl ExperienceStore {
         store.user_usage = file.user_usage.into_iter().collect();
         store.user_confidence = file.user_confidence.into_iter().collect();
         store.references = file.references;
+        store.scope_policies = file.scope_policies;
+        store.candidate_origins = file.candidate_origins;
         for experience in file.experiences {
             store.insert(experience)?;
         }
@@ -341,6 +376,7 @@ impl ExperienceStore {
         self.display_names.remove(name);
         self.user_usage.remove(name);
         self.user_confidence.remove(name);
+        self.candidate_origins.remove(name);
         self.experiences.remove(index);
         self.reindex();
         Ok(())
@@ -414,6 +450,74 @@ impl ExperienceStore {
                     && self.is_in_scope(&experience.name, scope)
             })
             .collect()
+    }
+
+    /// Global default capability policy (falls back to built-in defaults when
+    /// no policy was ever stored).
+    pub fn global_policy(&self) -> CapabilityPolicy {
+        self.scope_policies
+            .get(GLOBAL_SCOPE_KEY)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Effective capability policy for `scope`: its own policy file entry, or
+    /// the global default. Unscoped calls resolve to the global default.
+    pub fn policy_for_scope(&self, scope: Option<&str>) -> CapabilityPolicy {
+        match scope {
+            Some(scope) => self
+                .scope_policies
+                .get(scope)
+                .cloned()
+                .unwrap_or_else(|| self.global_policy()),
+            None => self.global_policy(),
+        }
+    }
+
+    /// Whether an explicit policy exists for `scope` (audit diagnostics).
+    pub fn has_policy_for_scope(&self, scope: &str) -> bool {
+        self.scope_policies.contains_key(scope)
+    }
+
+    /// Stored policies by scope (including the reserved global key).
+    pub fn scope_policies(&self) -> &BTreeMap<String, CapabilityPolicy> {
+        &self.scope_policies
+    }
+
+    /// S3.5: attach provenance to an auto-learned candidate.
+    pub fn set_candidate_origin(&mut self, name: &str, origin: CandidateOrigin) {
+        self.candidate_origins.insert(name.to_string(), origin);
+    }
+
+    /// Provenance for one experience, when recorded.
+    pub fn candidate_origin_of(&self, name: &str) -> Option<&CandidateOrigin> {
+        self.candidate_origins.get(name)
+    }
+
+    /// All recorded provenance (read-only view for hosts/UI).
+    pub fn candidate_origins(&self) -> &BTreeMap<String, CandidateOrigin> {
+        &self.candidate_origins
+    }
+
+    /// Set or clear (None) the policy for one scope; persists with the
+    /// envelope. `validate_policy` is enforced by the caller/API.
+    pub fn set_scope_policy(
+        &mut self,
+        scope: &str,
+        policy: Option<CapabilityPolicy>,
+    ) -> Result<(), StoreError> {
+        if scope.trim().is_empty() {
+            return Err(StoreError::Serialization("empty policy scope".to_string()));
+        }
+        match policy {
+            Some(policy) => {
+                self.scope_policies.insert(scope.to_string(), policy);
+            }
+            None => {
+                self.scope_policies.remove(scope);
+            }
+        }
+        Ok(())
     }
 
     pub fn display_name_of(&self, name: &str) -> Option<&str> {
@@ -586,6 +690,8 @@ impl ExperienceStore {
                 .map(|(name, value)| (name.clone(), *value))
                 .collect(),
             references: self.references.clone(),
+            scope_policies: self.scope_policies.clone(),
+            candidate_origins: self.candidate_origins.clone(),
         };
         let json = serde_json::to_string_pretty(&file)
             .map_err(|error| StoreError::Serialization(error.to_string()))?;
@@ -645,6 +751,8 @@ mod tests {
     use crate::domain::experience::VerificationStep;
     use crate::domain::experience::WorkflowStep;
     use crate::domain::predicate::Predicate;
+    use crate::policy::FS_WRITE_DENY;
+    use crate::policy::FS_WRITE_WORKSPACE_ONLY;
 
     #[test]
     fn transition_status_is_the_only_status_mutation_path() {
@@ -806,6 +914,61 @@ mod tests {
     }
 
     #[test]
+    fn scope_policy_resolves_and_persists_with_global_fallback() {
+        let mut store = ExperienceStore::default();
+        // No stored policy at all -> built-in conservative default.
+        assert_eq!(store.policy_for_scope(Some("scene-a")), CapabilityPolicy::default());
+
+        // Global default applies to scopes without their own entry.
+        let mut global = CapabilityPolicy::default();
+        global.fs_write = FS_WRITE_DENY.to_string();
+        store
+            .set_scope_policy(GLOBAL_SCOPE_KEY, Some(global.clone()))
+            .unwrap();
+        assert_eq!(store.policy_for_scope(None), global);
+        assert_eq!(store.policy_for_scope(Some("scene-a")), global);
+
+        // Scope entry overrides the global default for that scope only.
+        let mut scoped = global.clone();
+        scoped.fs_write = FS_WRITE_WORKSPACE_ONLY.to_string();
+        scoped.fs_read.max_bytes = 4_096;
+        store
+            .set_scope_policy("scene-a", Some(scoped.clone()))
+            .unwrap();
+        assert_eq!(store.policy_for_scope(Some("scene-a")), scoped);
+        assert_eq!(store.policy_for_scope(Some("scene-b")), global);
+        assert!(store.has_policy_for_scope("scene-a"));
+        assert!(!store.has_policy_for_scope("scene-b"));
+
+        let path = temp_store_path("scope-policy");
+        store.save_to_path(&path).unwrap();
+        let loaded = ExperienceStore::open(&path).unwrap();
+        assert_eq!(loaded.policy_for_scope(Some("scene-a")), scoped);
+        assert_eq!(loaded.policy_for_scope(Some("scene-b")), global);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn clearing_a_scope_policy_restores_global_fallback() {
+        let mut store = ExperienceStore::default();
+        let mut global = CapabilityPolicy::default();
+        global.fs_delete = FS_WRITE_WORKSPACE_ONLY.to_string();
+        store
+            .set_scope_policy(GLOBAL_SCOPE_KEY, Some(global.clone()))
+            .unwrap();
+        let mut scoped = CapabilityPolicy::default();
+        scoped.fs_write = FS_WRITE_DENY.to_string();
+        store.set_scope_policy("scene-a", Some(scoped)).unwrap();
+        assert!(!store.policy_for_scope(Some("scene-a")).allows("write_file"));
+
+        store.set_scope_policy("scene-a", None).unwrap();
+        let resolved = store.policy_for_scope(Some("scene-a"));
+        assert!(resolved.allows("write_file"));
+        assert_eq!(resolved, global);
+        store.set_scope_policy("  ", None).unwrap_err();
+    }
+
+    #[test]
     fn scope_assignment_persists_and_filters_active() {
         let mut store = ExperienceStore::default();
         store.insert(probe_file_experience()).unwrap();
@@ -948,6 +1111,8 @@ mod tests {
             user_usage: BTreeMap::new(),
             user_confidence: BTreeMap::new(),
             references: BTreeMap::new(),
+            scope_policies: BTreeMap::new(),
+            candidate_origins: BTreeMap::new(),
         };
         let json = serde_json::to_string(&store).unwrap();
         assert!(matches!(

@@ -606,3 +606,30 @@
     grid-template-columns: 1fr;
   }
 }
+/* S3.5 同族经验（只读） */
+.similar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.similar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.similar-item:hover {
+  background: var(--surface-alt, #f8fafc);
+}
+
+.similar-score {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+}

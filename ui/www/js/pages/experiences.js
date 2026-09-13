@@ -7,6 +7,7 @@
 /* ---------- 全局状态 ---------- */
 let experiences = [];
 let usage = { entries: {} };
+let similarity = { clusters: [], pairs: [] };
 let currentExperience = null;
 
 /* ---------- 工具函数 ---------- */
@@ -149,6 +150,11 @@ async function loadExperiences() {
       api("/api/experiences"),
       api("/api/usage").catch(() => ({ entries: {} })),
     ]);
+    // S3.5: the similarity view is advisory only; a failure must not block the library.
+    similarity = await api("/api/similarity?threshold=0.5").catch(() => ({
+      clusters: [],
+      pairs: [],
+    }));
     refreshScopeOptions();
     renderExperienceTree();
   } catch (error) {
@@ -351,6 +357,9 @@ async function openExperience(name) {
 
     // 使用统计
     renderUsagePanel(detail);
+
+    // S3.5 同族经验（只读）
+    renderSimilarPanel(detail.name);
 
     // 经验内容
     renderExpBody(detail);
@@ -575,6 +584,40 @@ function renderScoresPanel(detail) {
 /**
  * 渲染使用统计区
  */
+/**
+ * S3.5 同族经验（只读）：从 /api/similarity 结果里取当前经验所在的相似对，
+ * 只做提示与跳转，不提供任何自动合并入口。
+ */
+function renderSimilarPanel(name) {
+  const box = $("exp-similar");
+  box.innerHTML = "";
+  const related = (similarity.pairs || [])
+    .filter((pair) => pair.left === name || pair.right === name)
+    .map((pair) => ({
+      name: pair.left === name ? pair.right : pair.left,
+      score: pair.similarity,
+    }));
+
+  if (related.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "similar-empty text-sm text-muted";
+    empty.textContent = "暂无结构相似的经验";
+    box.appendChild(empty);
+    return;
+  }
+
+  related.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "similar-item";
+    const percent = Math.round(item.score * 100);
+    row.innerHTML =
+      `<span class="similar-name">${esc(item.name)}</span>` +
+      `<span class="similar-score">${percent}%</span>`;
+    row.addEventListener("click", () => openExperience(item.name));
+    box.appendChild(row);
+  });
+}
+
 function renderUsagePanel(detail) {
   const box = $("exp-usage");
   const entry = usage.entries[detail.name];

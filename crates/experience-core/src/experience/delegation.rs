@@ -12,6 +12,8 @@ use crate::domain::predicate::TruthValue;
 use crate::experience::qualification::ProbeSource;
 use crate::experience::qualification::predicates_observable;
 use crate::experience::qualification::ConfidenceRecord;
+use crate::state_source;
+use crate::state_source::ProbePolicy;
 
 /// Freshness TTL for the built-in filesystem probe source.
 pub const FS_PROBE_TTL_SECS: u64 = 60;
@@ -20,33 +22,26 @@ pub const FS_PROBE_TTL_SECS: u64 = 60;
 /// a predicate is observable when it binds to a source with a freshness TTL
 /// and the source can be evaluated now.
 pub fn resolve_default_source(key: &str) -> Option<ProbeSource> {
-    if key == "cwd.exists" || key.starts_with("file:") {
-        Some(ProbeSource {
-            id: "fs_probe".to_string(),
-            freshness_ttl: FS_PROBE_TTL_SECS,
-        })
-    } else {
-        None
-    }
+    let family = state_source::family_of(key)?;
+    let (id, ttl) = match family {
+        "fs" => ("fs_probe", FS_PROBE_TTL_SECS),
+        "exec" => ("exec_evidence", 30),
+        "git" => ("git_probe", 30),
+        "http" => ("http_probe", 15),
+        "net" => ("net_probe", 10),
+        _ => return None,
+    };
+    Some(ProbeSource {
+        id: id.to_string(),
+        freshness_ttl: ttl,
+    })
 }
 
 /// Evaluate a predicate key against the real filesystem under `base_dir`.
+/// S3: rich key families (size/sha256/dir/git/http/port) resolve through the
+/// State Source Registry; unregistered keys stay `None` (→ Unknown).
 pub fn probe_value(key: &str, base_dir: &Path) -> Option<serde_json::Value> {
-    match key {
-        "cwd.exists" => Some(serde_json::json!(base_dir.is_dir())),
-        _ if key.starts_with("file:") => {
-            let rest = &key["file:".len()..];
-            if let Some(path) = rest.strip_suffix(".content") {
-                let full = base_dir.join(path);
-                std::fs::read_to_string(full).ok().map(serde_json::Value::String)
-            } else if let Some(path) = rest.strip_suffix(".exists") {
-                Some(serde_json::json!(base_dir.join(path).exists()))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    state_source::probe(key, base_dir, &ProbePolicy::default()).value
 }
 
 /// D3: a task is a list of segments; remaining = uncovered segments.
@@ -196,9 +191,8 @@ pub fn delegation_text(
     if !completed_step_ids.is_empty() {
         // Stage S1 / P2-4 ruling (option A): the completed section is
         // factual and must NOT be re-executed by the delegated agent.
-        text.push_str(
-            "\n\n[注意] 以上 experience 步骤已执行并通过验证，请勿重复执行；只完成剩余部分或确认收尾。",
-        );
+        text.push_str("\n\n[注意] 以上 experience 步骤已在进程内执行并通过验证，请勿重复执行；");
+        text.push_str("也不要重写、覆盖、回滚这些文件改动。只完成剩余部分或确认收尾即可。");
     }
     text
 }

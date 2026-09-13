@@ -6,6 +6,10 @@
 
 pub mod experience;
 pub mod domain;
+pub mod exec;
+pub mod policy;
 pub mod redact;
 pub mod safety;
+pub mod similarity;
+pub mod state_source;
 pub mod store;

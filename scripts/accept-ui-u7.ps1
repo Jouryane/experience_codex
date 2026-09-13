@@ -33,10 +33,11 @@ try {
 
     $pages = @(
         @{ url='index.html'; markers=@('task-list','agent-select','scope-input') },
-        @{ url='experiences.html'; markers=@('experience-tree','tree-search','status-filter') },
+        @{ url='experiences.html'; markers=@('experience-tree','tree-search','status-filter','exp-similar','同族经验') },
         @{ url='absorb.html'; markers=@('upload-area','parse-btn','prompt-template','checklist') },
         @{ url='agents.html'; markers=@('agent-list','agent-form','refresh-agents') },
-        @{ url='audit.html'; markers=@('audit-name','audit-timeline','refresh-audit') }
+        @{ url='audit.html'; markers=@('audit-name','audit-timeline','refresh-audit') },
+        @{ url='settings.html'; markers=@('policy-save','setting-compiler','undo-list','settings.js') }
     )
     $failures = 0
     foreach ($page in $pages) {
@@ -53,7 +54,7 @@ try {
         Write-Output "$($page.url) http=$httpOk markers=$markerOk"
         if (-not ($httpOk -and $markerOk)) { $failures++ }
     }
-    foreach ($asset in @('css/base.css','js/api.js','js/pages/absorb.js','js/pages/experiences.js')) {
+    foreach ($asset in @('css/base.css','js/api.js','js/pages/absorb.js','js/pages/experiences.js','js/pages/settings.js','css/pages/settings.css')) {
         $r = Invoke-WebRequest "http://127.0.0.1:$Port/$asset" -UseBasicParsing
         Write-Output "asset $asset -> $($r.StatusCode)"
         if ($r.StatusCode -ne 200) { $failures++ }

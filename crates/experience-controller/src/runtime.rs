@@ -402,7 +402,7 @@ mod tests {
         let runtime = ExperienceGateRuntime::new(
             store,
             Box::new(super::super::probe::LocalProbe),
-            Box::new(super::super::runner::LocalRunner),
+            Box::new(super::super::runner::LocalRunner::default()),
         );
         (runtime, GateContext { cwd: dir.clone() }, dir)
     }
@@ -467,7 +467,7 @@ mod tests {
         let runtime = ExperienceGateRuntime::new(
             store,
             Box::new(super::super::probe::LocalProbe),
-            Box::new(super::super::runner::LocalRunner),
+            Box::new(super::super::runner::LocalRunner::default()),
         );
         let context = GateContext { cwd: dir.clone() };
         let proposal = ActionProposal::new(
@@ -488,8 +488,8 @@ mod tests {
         let dir = temp_dir("fail");
         fs::create_dir_all(&dir).unwrap();
         let mut store = ExperienceStore::default();
-        // exec_command is unsupported by LocalRunner: the step must fail
-        // loudly instead of being skipped or silently completed.
+        // exec_command is denied by the default capability policy: the step
+        // must fail loudly instead of being skipped or silently completed.
         let mut experience = probe_file_experience("failing");
         experience.workflow = vec![WorkflowStep::new(
             "exec_command",
@@ -499,7 +499,7 @@ mod tests {
         let runtime = ExperienceGateRuntime::new(
             store,
             Box::new(super::super::probe::LocalProbe),
-            Box::new(super::super::runner::LocalRunner),
+            Box::new(super::super::runner::LocalRunner::default()),
         );
         let context = GateContext { cwd: dir.clone() };
         let proposal = ActionProposal::new(
@@ -515,7 +515,7 @@ mod tests {
             result
                 .execution_evidence
                 .iter()
-                .any(|line| line.contains("unsupported workflow action"))
+                .any(|line| line.contains("policy denied step 'exec_command'"))
         );
         let _ = fs::remove_dir_all(&dir);
     }

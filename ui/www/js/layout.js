@@ -15,6 +15,7 @@ const NAV_ROUTES = [
   { key: "absorb", pattern: /^\/absorb/i, label: "经验吸收" },
   { key: "agents", pattern: /^\/agents/i, label: "助手" },
   { key: "audit", pattern: /^\/audit/i, label: "操作记录" },
+  { key: "settings", pattern: /^\/settings/i, label: "设置" },
 ];
 
 /**
