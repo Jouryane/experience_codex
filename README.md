@@ -1,6 +1,33 @@
 # Experience
 
-**Experience 是一个“会积累、会复用、可审计”的本地 Agent 编排与经验系统。**
+**你的 Agent 不缺能力，缺的是可复现、可审计、可回滚。**
+
+Experience 是 Agent 与 AI 应用之间的**可验证执行层**（我们叫它 3.5 层）：
+已解决的问题由它在进程内直接完成并留下证据，只有判断类工作才交给 Agent。
+
+30 秒看懂三件事：
+
+1. **命中即先动手**——不是给 Agent 提示词，而是执行预编译步骤（写入/追加/复制/
+   移动/删除、受控命令），并自动备份；
+2. **副作用之前就拒绝**——越界路径、危险命令、未授权动作在执行前被挡下，
+   默认只允许工作区内写入，删除与命令执行默认关闭；
+3. **可复现、可审计、可回滚**——每步都有证据与 ledger，撤销一次运行只要一条命令。
+
+没有匹配到经验时**纯委派，不阻塞**：Agent 照常工作，本次执行还会沉淀成候选经验。
+
+```powershell
+# 30 秒验证（无需 API key、不需要模型）
+cargo test --workspace --offline
+pwsh -File scripts\accept-s3-state.ps1   # 判据注册表 + 五级门
+pwsh -File scripts\accept-s4-settings.ps1 # 设置持久化 + 一键撤销
+```
+
+想先读判断而不读代码：[产品总览](docs/product-overview.md) ·
+[3.5 层定位长文](docs/why-3-5-layer.md) · [学习与复用契约](docs/learning-reuse-contract.md)
+
+---
+
+## Experience 是什么（展开版）
 
 它把 Agent（Codex / Trae / Claude Code / DeepSeek harness 等）当作可插拔的
 执行器：已知且可验证的部分由 Experience 直接完成（先动手），无法确定的部分
@@ -79,6 +106,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 |---|---|
 | docs/usage-guide.md | 使用说明与第一性问题（规模、五类经验、经验如何形成） |
 | docs/product-overview.md | **产品总览（可用于宣发）**：使用方案、业务流程、行业场景（金融/具身）、优势与硬伤 |
+| docs/why-3-5-layer.md | **定位长文（可用于宣发）**：为什么 Agent 之上还缺一层、四个硬指标与公开边界 |
 | docs/experience-app.md | 本地应用（launcher/server/UI）与运行方式 |
 | docs/l1-learning-design.md | 学习回流与 L1–L4 分级口径 |
 | docs/l2-qualification-design.md | 资格验证与生命周期 |
