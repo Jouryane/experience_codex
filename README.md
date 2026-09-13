@@ -78,6 +78,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-app.ps1
 | 文档 | 内容 |
 |---|---|
 | docs/usage-guide.md | 使用说明与第一性问题（规模、五类经验、经验如何形成） |
+| docs/product-overview.md | **产品总览（可用于宣发）**：使用方案、业务流程、行业场景（金融/具身）、优势与硬伤 |
 | docs/experience-app.md | 本地应用（launcher/server/UI）与运行方式 |
 | docs/l1-learning-design.md | 学习回流与 L1–L4 分级口径 |
 | docs/l2-qualification-design.md | 资格验证与生命周期 |
