@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>经验库 — Experience</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/pages/experiences.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <!-- 左侧侧边栏 -->
+      <aside class="app-sidebar">
+        <div class="app-brand">Experience</div>
+        <nav class="app-nav">
+          <a href="index.html" class="nav-item" data-nav="sessions">
+            <span class="nav-icon">▸</span> 任务
+          </a>
+          <a href="experiences.html" class="nav-item active" data-nav="experiences">
+            <span class="nav-icon">◇</span> 经验库
+          </a>
+          <a href="absorb.html" class="nav-item" data-nav="absorb">
+            <span class="nav-icon">◈</span> 经验吸收
+          </a>
+          <a href="agents.html" class="nav-item" data-nav="agents">
+            <span class="nav-icon">◯</span> 助手
+          </a>
+          <a href="settings.html" class="nav-item" data-nav="settings">
+            <span class="nav-icon">⚙</span> 设置
+          </a>
+          <a href="audit.html" class="nav-item" data-nav="audit">
+            <span class="nav-icon">▢</span> 操作记录
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="health" class="health-dot"></span>
+          <span id="health-text" class="text-sm text-muted">检查中…</span>
+        </div>
+      </aside>
+
+      <!-- 主内容区 -->
+      <main class="app-main">
+        <div class="exp-page">
+          <!-- 左侧：经验树面板 -->
+          <section class="exp-tree-panel panel">
+            <div class="tree-panel-head">
+              <h2>经验库</h2>
+            </div>
+            <div class="tree-search-row">
+              <input
+                id="tree-search"
+                type="text"
+                placeholder="搜索经验名称…"
+                class="tree-search-input"
+              />
+            </div>
+            <div class="tree-filter-row">
+              <select id="scope-filter" class="filter-select">
+                <option value="">全部场景</option>
+              </select>
+              <select id="status-filter" class="filter-select">
+                <option value="">全部状态</option>
+                <option value="active">已启用</option>
+                <option value="draft">草稿</option>
+                <option value="candidate">待验证</option>
+                <option value="validated">已验证</option>
+                <option value="decaying">待评估</option>
+                <option value="disabled">已停用</option>
+              </select>
+              <input
+                id="usage-min"
+                type="number"
+                min="0"
+                placeholder="最少使用次数"
+                class="usage-min-input"
+              />
+              <button id="refresh-tree" class="btn btn-sm" title="刷新">刷新</button>
+            </div>
+            <div class="tree-container">
+              <ul id="experience-tree" class="exp-tree"></ul>
+            </div>
+          </section>
+
+          <!-- 右侧：详情面板 -->
+          <section class="exp-detail-panel panel" id="detail-panel">
+            <!-- 空态引导 -->
+            <div id="detail-empty" class="detail-empty">
+              <div class="empty-icon">📚</div>
+              <div class="empty-title">选择一条经验查看详情</div>
+              <div class="empty-desc">
+                在左侧经验库中浏览或搜索经验，点击即可查看完整内容、评分与操作记录。
+              </div>
+            </div>
+
+            <!-- 详情内容 -->
+            <div id="detail-content" class="detail-content hidden">
+              <!-- 顶部标题 + 状态徽章 -->
+              <div class="detail-header">
+                <h1 id="detail-name" class="detail-title"></h1>
+                <div id="detail-badges" class="detail-badges"></div>
+              </div>
+
+              <!-- 操作按钮行 -->
+              <div id="exp-actions" class="detail-actions"></div>
+
+              <!-- 基本信息区 -->
+              <div class="detail-section">
+                <div class="section-title">基本信息</div>
+                <div id="detail-meta" class="meta-forms"></div>
+              </div>
+
+              <!-- 评分区 -->
+              <div class="detail-section">
+                <div class="section-title">评分</div>
+                <div id="exp-scores" class="scores-panel"></div>
+                <div class="scores-hint text-sm text-muted">
+                  系统评分基于实际使用数据，我的评价仅影响个人排序
+                </div>
+              </div>
+
+              <!-- 使用统计区 -->
+              <div class="detail-section">
+                <div class="section-title">使用统计</div>
+                <div id="exp-usage" class="usage-panel"></div>
+              </div>
+
+              <!-- 同族经验（只读） -->
+              <div class="detail-section">
+                <div class="section-title">同族经验（只读）</div>
+                <div id="exp-similar" class="similar-panel"></div>
+                <div class="text-sm text-muted">
+                  结构相似度仅作提示；合并或删除需要你显式操作。
+                </div>
+              </div>
+
+              <!-- 经验内容区 -->
+              <div class="detail-section">
+                <div class="section-title">经验内容</div>
+                <div id="exp-body" class="exp-body">
+                  <div class="body-section">
+                    <div class="body-label">trigger</div>
+                    <pre id="body-trigger" class="body-code"></pre>
+                  </div>
+                  <div class="body-section">
+                    <div class="body-label">preconditions</div>
+                    <pre id="body-pre" class="body-code"></pre>
+                  </div>
+                  <div class="body-section">
+                    <div class="body-label">steps（workflow）</div>
+                    <pre id="body-steps" class="body-code"></pre>
+                  </div>
+                  <div class="body-section">
+                    <div class="body-label">postconditions</div>
+                    <pre id="body-post" class="body-code"></pre>
+                  </div>
+                  <div class="body-section">
+                    <div class="body-label">verification</div>
+                    <pre id="body-verification" class="body-code"></pre>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 编辑区（草稿模式时显示） -->
+              <div class="detail-section hidden" id="editor-section">
+                <div class="section-title">编辑草稿</div>
+                <div id="editor-root" class="editor-root"></div>
+              </div>
+
+              <!-- 操作记录区 -->
+              <div class="detail-section">
+                <div class="section-title">操作记录</div>
+                <ul id="audit-list" class="audit-list"></ul>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/layout.js"></script>
+    <script src="js/pages/experiences.js"></script>
+  </body>
+</html>

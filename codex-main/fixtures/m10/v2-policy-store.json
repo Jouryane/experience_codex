@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "experiences": [],
+  "templates": [],
+  "scope_policies": {
+    "__global__": {
+      "fs_read": {
+        "enabled": true,
+        "workspace_only": true,
+        "max_bytes": 20480
+      },
+      "fs_write": "workspace_only",
+      "fs_delete": "workspace_only",
+      "exec": {
+        "mode": "allowlist",
+        "allow": ["git", "python"],
+        "timeout_secs": 30
+      },
+      "network": {
+        "mode": "allowlist",
+        "allow": ["github.com"]
+      }
+    }
+  }
+}

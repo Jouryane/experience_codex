@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "m6_task_full",
+      "trigger": {
+        "tool": "task",
+        "command_pattern": "m6 task full"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "write_file",
+          "args": {
+            "path": "m6-existing.txt",
+            "content": "M6_FULL_OK\n"
+          }
+        },
+        {
+          "action": "write_file",
+          "args": {
+            "path": "m6-full.txt",
+            "content": "M6_FULL_OK\n"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:m6-existing.txt.exists",
+          "expected": true
+        },
+        {
+          "key": "file:m6-existing.txt.content",
+          "expected": "M6_FULL_OK\n"
+        },
+        {
+          "key": "file:m6-full.txt.exists",
+          "expected": true
+        },
+        {
+          "key": "file:m6-full.txt.content",
+          "expected": "M6_FULL_OK\n"
+        }
+      ],
+      "verification": [
+        {
+          "kind": "read_file",
+          "path": "m6-existing.txt",
+          "expect_content": "M6_FULL_OK\n"
+        },
+        {
+          "kind": "read_file",
+          "path": "m6-full.txt",
+          "expect_content": "M6_FULL_OK\n"
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}

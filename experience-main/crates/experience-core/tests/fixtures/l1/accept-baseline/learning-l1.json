@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "record_type": "written",
+      "candidate_name": "cand_accept_baseline",
+      "session_id": "s-cold",
+      "trace_version": 1,
+      "outcome": "written",
+      "recorded_at": 1
+    },
+    {
+      "record_type": "rejected",
+      "candidate_name": "cand_accept_baseline",
+      "session_id": "s-repeat",
+      "trace_version": 1,
+      "outcome": "rejected:repeat_no_improvement",
+      "recorded_at": 2
+    },
+    {
+      "record_type": "rejected",
+      "candidate_name": "cand_accept_baseline",
+      "session_id": "s-noop",
+      "trace_version": 1,
+      "outcome": "rejected:no_action_evidence",
+      "recorded_at": 3
+    }
+  ]
+}

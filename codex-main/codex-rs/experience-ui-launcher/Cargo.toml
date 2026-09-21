@@ -1,0 +1,11 @@
+[package]
+name = "experience-ui-launcher"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "experience-ui-launcher"
+path = "src/main.rs"
+
+[dependencies]

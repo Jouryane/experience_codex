@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "create_probe_file",
+      "trigger": {
+        "tool": "exec_command",
+        "command_pattern": "create probe file"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "write_file",
+          "args": {
+            "path": "probe.txt",
+            "content": "EXPERIENCE_GATE_SUCCESS"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:probe.txt.exists",
+          "expected": true
+        }
+      ],
+      "verification": [],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ],
+  "pinned": [],
+  "scopes": {},
+  "display_names": {},
+  "user_usage": {},
+  "user_confidence": {},
+  "references": {
+    "ref_trae_dark_theme": {
+      "id": "ref_trae_dark_theme",
+      "title": "Trae dark-theme frontend workflow",
+      "scope": "scene-frontend",
+      "tags": ["frontend", "theme"],
+      "body": "run-notes: scaffold -> deps -> components -> styles -> verify",
+      "steps": [
+        "scaffold component tree",
+        "install ui kit dependency",
+        "rewrite theme tokens",
+        "verify with screenshot"
+      ],
+      "tools_used": ["file-edit", "terminal"],
+      "plugins_used": ["ui-kit"],
+      "source_agent": "trae",
+      "declared": true,
+      "trust_level": "workspace_verified",
+      "evidence_summary": "git diff --stat: 4 files changed",
+      "created_at": 1
+    }
+  }
+}

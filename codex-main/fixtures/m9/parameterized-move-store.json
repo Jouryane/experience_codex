@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "pinned": [
+    "m9_move_any_inbox_file"
+  ],
+  "user_confidence": {
+    "m9_move_any_inbox_file": 1.0
+  },
+  "templates": [
+    {
+      "name": "m9_move_any_inbox_file",
+      "trigger": {
+        "tool": "task",
+        "command_pattern": "M9 move"
+      },
+      "parameters": [
+        {
+          "name": "source",
+          "source": "task",
+          "prefix": "[source=",
+          "suffix": "]",
+          "required": true
+        },
+        {
+          "name": "target",
+          "source": "task",
+          "prefix": "[target=",
+          "suffix": "]",
+          "required": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "move_file",
+          "args": {
+            "source": "${source}",
+            "target": "${target}"
+          }
+        }
+      ],
+      "preconditions": [
+        {
+          "key": "file:${source}.exists",
+          "expected": true
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:${source}.exists",
+          "expected": false
+        },
+        {
+          "key": "file:${target}.exists",
+          "expected": true
+        }
+      ],
+      "verification": [
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:${source}.exists",
+            "expected": false
+          }
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:${target}.exists",
+            "expected": true
+          }
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}

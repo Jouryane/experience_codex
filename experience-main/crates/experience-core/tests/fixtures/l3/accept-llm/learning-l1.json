@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "record_type": "written",
+      "candidate_name": "cand_create_seq_files_in_sequence",
+      "session_id": "s-l3-llm-fixture",
+      "thread_id": "thread-l3-llm-fixture",
+      "trace_version": 1,
+      "action": null,
+      "from": null,
+      "to": null,
+      "reason": null,
+      "outcome": "written",
+      "recorded_at": 1
+    }
+  ]
+}

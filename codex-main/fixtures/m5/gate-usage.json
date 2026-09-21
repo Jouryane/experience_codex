@@ -1,0 +1,21 @@
+{
+  "entries": {
+    "create_probe_file": {
+      "last_used": 1,
+      "hits": 1,
+      "misfires": 0,
+      "invalid_failures": 0,
+      "decisions": {
+        "experience_only": 1
+      },
+      "logs": [
+        {
+          "at": 1,
+          "band": "experience_only",
+          "process": "codex-m4-gate"
+        }
+      ]
+    }
+  },
+  "audit": []
+}

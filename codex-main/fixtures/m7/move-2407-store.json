@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "pinned": [
+    "move_desktop_paper_2407"
+  ],
+  "user_confidence": {
+    "move_desktop_paper_2407": 1.0
+  },
+  "experiences": [
+    {
+      "name": "move_desktop_paper_2407",
+      "trigger": {
+        "tool": "task",
+        "command_pattern": "2407.09450v3"
+      },
+      "preconditions": [
+        {
+          "key": "file:2407.09450v3.pdf.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "move_file",
+          "args": {
+            "source": "2407.09450v3.pdf",
+            "target": "papers-archive/2407.09450v3.pdf"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:2407.09450v3.pdf.exists",
+          "expected": false
+        },
+        {
+          "key": "file:papers-archive/2407.09450v3.pdf.exists",
+          "expected": true
+        }
+      ],
+      "verification": [
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:2407.09450v3.pdf.exists",
+            "expected": false
+          }
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:papers-archive/2407.09450v3.pdf.exists",
+            "expected": true
+          }
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}

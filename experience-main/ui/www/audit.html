@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>操作记录 - Experience</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/pages/audit.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="app-sidebar">
+        <div class="app-brand">Experience</div>
+        <nav class="app-nav">
+          <a href="index.html" class="nav-item" data-nav="sessions">
+            <span class="nav-icon">▸</span> 任务
+          </a>
+          <a href="experiences.html" class="nav-item" data-nav="experiences">
+            <span class="nav-icon">◇</span> 经验库
+          </a>
+          <a href="absorb.html" class="nav-item" data-nav="absorb">
+            <span class="nav-icon">◈</span> 经验吸收
+          </a>
+          <a href="agents.html" class="nav-item" data-nav="agents">
+            <span class="nav-icon">◯</span> 助手
+          </a>
+          <a href="settings.html" class="nav-item" data-nav="settings">
+            <span class="nav-icon">⚙</span> 设置
+          </a>
+          <a href="audit.html" class="nav-item active" data-nav="audit">
+            <span class="nav-icon">▢</span> 操作记录
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="health" class="health-dot"></span>
+          <span id="health-text" class="text-sm text-muted">检查中…</span>
+        </div>
+      </aside>
+
+      <main class="app-main">
+        <!-- 页面标题 -->
+        <div class="page-header-row">
+          <h1 class="page-header">操作记录</h1>
+        </div>
+
+        <!-- 筛选栏 -->
+        <section class="panel">
+          <div class="filter-bar">
+            <div class="filter-item">
+              <label for="audit-name">经验名</label>
+              <input id="audit-name" placeholder="搜索经验名称" />
+            </div>
+            <div class="filter-item">
+              <label for="audit-type">操作类型</label>
+              <select id="audit-type">
+                <option value="">全部类型</option>
+                <option value="drafted">创建草稿</option>
+                <option value="edited">修改内容</option>
+                <option value="adopted">应用修改</option>
+                <option value="abandoned">放弃草稿</option>
+                <option value="activated">启用经验</option>
+                <option value="disabled">停用经验</option>
+                <option value="validated">验证通过</option>
+                <option value="deleted">删除经验</option>
+                <option value="pinned">置顶</option>
+                <option value="unpinned">取消置顶</option>
+                <option value="scope_changed">更改场景</option>
+                <option value="display_name_changed">修改显示名称</option>
+                <option value="user_preference_changed">修改我的偏好</option>
+              </select>
+            </div>
+            <div class="filter-item">
+              <label for="audit-limit">数量</label>
+              <input id="audit-limit" type="number" value="100" min="1" max="500" />
+            </div>
+            <div class="filter-item filter-action">
+              <button id="refresh-audit" class="btn btn-primary">刷新</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 时间线列表 -->
+        <section class="panel">
+          <div class="panel-head">
+            <h2>变更日志</h2>
+            <span id="audit-count" class="audit-count text-muted text-sm"></span>
+          </div>
+          <div id="audit-timeline" class="timeline"></div>
+          <div id="audit-empty" class="audit-empty hidden">
+            暂无操作记录
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/layout.js"></script>
+    <script src="js/pages/audit.js"></script>
+  </body>
+</html>

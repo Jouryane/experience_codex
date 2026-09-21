@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "create_probe_file",
+      "trigger": {
+        "tool": "exec_command",
+        "command_pattern": "create probe file"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "write_file",
+          "args": {
+            "path": "probe.txt",
+            "content": "EXPERIENCE_GATE_SUCCESS"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:probe.txt.exists",
+          "expected": true
+        },
+        {
+          "key": "file:probe.txt.content",
+          "expected": "EXPERIENCE_GATE_SUCCESS"
+        }
+      ],
+      "verification": [
+        {
+          "kind": "read_file",
+          "path": "probe.txt",
+          "expect_content": "EXPERIENCE_GATE_SUCCESS"
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}

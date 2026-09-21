@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "crates/experience-core",
+    "crates/agent-runtime",
+    "crates/agent-codex",
+    "crates/experience-controller",
+    "apps/experience-server",
+    "apps/experience-launcher",
+]
+resolver = "2"

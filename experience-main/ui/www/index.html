@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>任务 — Experience</title>
+    <link rel="stylesheet" href="css/base.css" />
+    <link rel="stylesheet" href="css/pages/tasks.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <!-- 左侧侧边栏 -->
+      <aside class="app-sidebar">
+        <div class="app-brand">Experience</div>
+        <nav class="app-nav">
+          <a href="index.html" class="nav-item active" data-nav="sessions">
+            <span class="nav-icon">▸</span> 任务
+          </a>
+          <a href="experiences.html" class="nav-item" data-nav="experiences">
+            <span class="nav-icon">◇</span> 经验库
+          </a>
+          <a href="absorb.html" class="nav-item" data-nav="absorb">
+            <span class="nav-icon">◈</span> 经验吸收
+          </a>
+          <a href="agents.html" class="nav-item" data-nav="agents">
+            <span class="nav-icon">◯</span> 助手
+          </a>
+          <a href="settings.html" class="nav-item" data-nav="settings">
+            <span class="nav-icon">⚙</span> 设置
+          </a>
+          <a href="audit.html" class="nav-item" data-nav="audit">
+            <span class="nav-icon">▢</span> 操作记录
+          </a>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="health" class="health-dot"></span>
+          <span id="health-text" class="text-sm text-muted">检查中…</span>
+        </div>
+      </aside>
+
+      <!-- 右侧主内容区 -->
+      <main class="app-main">
+        <!-- 历史任务列表面板 -->
+        <section class="task-list-panel">
+          <div class="panel-head">
+            <h2>历史任务</h2>
+            <button id="new-task-btn" class="btn btn-sm" title="新建任务">新建任务</button>
+          </div>
+          <ul id="task-list" class="task-list"></ul>
+        </section>
+
+        <!-- 任务对话区 -->
+        <section class="task-chat-panel">
+          <!-- 顶部工具栏 -->
+          <div class="chat-toolbar">
+            <div class="toolbar-group left">
+              <span class="toolbar-label">选择助手</span>
+              <select id="agent-select" class="toolbar-select"></select>
+              <span id="agent-state-text" class="toolbar-status">—</span>
+            </div>
+            <div class="toolbar-group">
+              <span class="toolbar-label">场景</span>
+              <input
+                id="scope-input"
+                class="toolbar-select"
+                placeholder="自动选择"
+                list="scope-options"
+              />
+              <datalist id="scope-options"></datalist>
+            </div>
+            <div class="toolbar-actions">
+              <button id="resume-task-btn" class="btn hidden">继续此任务</button>
+              <button id="cancel-task-btn" class="btn btn-danger hidden">终止执行</button>
+            </div>
+          </div>
+
+          <!-- 消息区 -->
+          <div id="messages-area" class="messages-area">
+            <div class="messages-empty">
+              <div class="empty-title">选择一个助手，告诉我你想做什么</div>
+              <div class="empty-desc">在下方输入任务内容，点击「开始执行」</div>
+            </div>
+          </div>
+
+          <!-- 底部输入区 -->
+          <form id="task-form" class="task-input-area">
+            <textarea
+              id="task-input"
+              class="task-input-textarea"
+              placeholder="告诉我你想做什么，我来帮你完成…"
+              required
+            ></textarea>
+            <div class="task-input-row">
+              <input
+                id="cwd-input"
+                class="cwd-input"
+                placeholder="工作目录（可选，默认 Experience home）"
+              />
+              <button type="submit" id="submit-btn" class="btn btn-primary submit-btn">
+                开始执行
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/layout.js"></script>
+    <script src="js/pages/tasks.js"></script>
+  </body>
+</html>

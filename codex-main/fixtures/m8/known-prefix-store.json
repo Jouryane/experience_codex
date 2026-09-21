@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "pinned": [
+    "m8_known_file_prefix"
+  ],
+  "user_confidence": {
+    "m8_known_file_prefix": 1.0
+  },
+  "experiences": [
+    {
+      "name": "m8_known_file_prefix",
+      "trigger": {
+        "tool": "task_prefix",
+        "command_pattern": "M8 complex task"
+      },
+      "preconditions": [
+        {
+          "key": "file:inbox/2407.09450v3.pdf.exists",
+          "expected": true
+        },
+        {
+          "key": "file:inbox/2603.07670v1.pdf.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "mkdir",
+          "args": {
+            "path": "docs"
+          }
+        },
+        {
+          "action": "write_file",
+          "args": {
+            "path": "docs/index.md",
+            "content": "# Papers\n\n- 2407.09450v3\n- 2603.07670v1\n"
+          }
+        },
+        {
+          "action": "mkdir",
+          "args": {
+            "path": "config"
+          }
+        },
+        {
+          "action": "write_file",
+          "args": {
+            "path": "config/settings.json",
+            "content": "{\"source\":\"inbox\",\"network\":\"github\",\"verified\":true}\n"
+          }
+        },
+        {
+          "action": "mkdir",
+          "args": {
+            "path": "library"
+          }
+        },
+        {
+          "action": "move_file",
+          "args": {
+            "source": "inbox/2407.09450v3.pdf",
+            "target": "library/2407.09450v3.pdf"
+          }
+        },
+        {
+          "action": "move_file",
+          "args": {
+            "source": "inbox/2603.07670v1.pdf",
+            "target": "library/2603.07670v1.pdf"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:docs/index.md.exists",
+          "expected": true
+        },
+        {
+          "key": "file:docs/index.md.content",
+          "expected": "# Papers\n\n- 2407.09450v3\n- 2603.07670v1\n"
+        },
+        {
+          "key": "file:config/settings.json.exists",
+          "expected": true
+        },
+        {
+          "key": "file:config/settings.json.content",
+          "expected": "{\"source\":\"inbox\",\"network\":\"github\",\"verified\":true}\n"
+        },
+        {
+          "key": "file:library/2407.09450v3.pdf.exists",
+          "expected": true
+        },
+        {
+          "key": "file:library/2603.07670v1.pdf.exists",
+          "expected": true
+        },
+        {
+          "key": "file:inbox/2407.09450v3.pdf.exists",
+          "expected": false
+        },
+        {
+          "key": "file:inbox/2603.07670v1.pdf.exists",
+          "expected": false
+        }
+      ],
+      "verification": [
+        {
+          "kind": "read_file",
+          "path": "docs/index.md",
+          "expect_content": "# Papers\n\n- 2407.09450v3\n- 2603.07670v1\n"
+        },
+        {
+          "kind": "read_file",
+          "path": "config/settings.json",
+          "expect_content": "{\"source\":\"inbox\",\"network\":\"github\",\"verified\":true}\n"
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:library/2407.09450v3.pdf.exists",
+            "expected": true
+          }
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:library/2603.07670v1.pdf.exists",
+            "expected": true
+          }
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:inbox/2407.09450v3.pdf.exists",
+            "expected": false
+          }
+        },
+        {
+          "kind": "probe",
+          "predicate": {
+            "key": "file:inbox/2603.07670v1.pdf.exists",
+            "expected": false
+          }
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}

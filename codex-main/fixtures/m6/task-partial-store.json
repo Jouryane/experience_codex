@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "experiences": [
+    {
+      "name": "m6_task_prefix",
+      "trigger": {
+        "tool": "task_prefix",
+        "command_pattern": "m6 task partial"
+      },
+      "preconditions": [
+        {
+          "key": "cwd.exists",
+          "expected": true
+        }
+      ],
+      "workflow": [
+        {
+          "action": "write_file",
+          "args": {
+            "path": "m6-prefix.txt",
+            "content": "M6_PREFIX_OK\n"
+          }
+        }
+      ],
+      "postconditions": [
+        {
+          "key": "file:m6-prefix.txt.exists",
+          "expected": true
+        },
+        {
+          "key": "file:m6-prefix.txt.content",
+          "expected": "M6_PREFIX_OK\n"
+        }
+      ],
+      "verification": [
+        {
+          "kind": "read_file",
+          "path": "m6-prefix.txt",
+          "expect_content": "M6_PREFIX_OK\n"
+        }
+      ],
+      "failure_policy": "stop_and_report",
+      "undo": "unsupported",
+      "status": "active"
+    }
+  ]
+}
