@@ -166,7 +166,7 @@ M2 的本质不是新算法，而是**让经验系统真正活在 agent 循环�
 
 - **目标**：外部 Agent 通过 MCP 访问 Experience。
 - **现状**：`codex-mcp` 存在（MCP server），无 experience 命名空间。
-- **方案**：新增 `experience.*` 工具子集（只读优先）：`experience_list`、`experience_get`、`experience_state`、`experience_feedback`、`experience_transition`、`experience_observe_trace`。参考 prior-art `mcp_server.py` 设计，先做最小可用集。
+- **方案**：新增 `experience.*` 工具子集（只读优先）：`experience_list`、`experience_get`、`experience_state`、`experience_feedback`、`experience_transition`、`experience_observe_trace`。参考参考实现的 `mcp_server.py` 设计，先做最小可用集。
 - **改动文件**：`codex-mcp` 工具注册 + handler（薄壳调用 experience module）。
 - **验收**：工具 schema 注册测试 + handler 映射单测；运行验证（mcp 启动后工具列表含 experience.*）。
 - **风险**：MCP 改动面大 → **拆为 M2b**（M2 主线完成后再做）；只读优先，写操作仅 feedback/transition。

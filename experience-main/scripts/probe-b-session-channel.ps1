@@ -1,5 +1,6 @@
 param(
-    [string]$Codex = "C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\8e5b6932251c2c1c\codex.exe",
+    # Resolved from PATH unless given; a machine-specific path is never baked in.
+    [string]$Codex = "",
     [switch]$StartDaemon
 )
 # Path B probe: discover whether Experience can attach to a REAL codex
@@ -8,6 +9,7 @@ param(
 # sessions; it does NOT queue messages into any session.
 $ErrorActionPreference = "Continue"
 
+if (-not $Codex) { $Codex = (Get-Command codex.exe -ErrorAction SilentlyContinue).Source }
 if (-not (Test-Path $Codex)) { Write-Host "codex not found: $Codex"; exit 1 }
 
 $logDir = Join-Path $env:TEMP "exp-probe-b"

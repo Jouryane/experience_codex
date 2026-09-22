@@ -111,3 +111,9 @@ __pycache__/
 /codex-rs/out.txt
 /codex-rs/cargo-check-done.txt
 /codex-rs/cargo-check-full-output.txt
+
+# Ad-hoc local run scripts and task prompts: they name real local folders and
+# personal files, so they stay on disk but never enter the repository.
+/run-*.ps1
+/task*.txt
+/watch-*.ps1

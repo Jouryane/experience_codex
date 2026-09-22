@@ -10,7 +10,7 @@
 //!    the experience depends on actually present (conditions) and is it
 //!    trusted enough (confidence x similarity thresholds)?
 //!
-//! The reference implementation (prior-art matcher.py) matches on text features
+//! The reference implementation's `matcher.py` matches on text features
 //! (rule / tag / vector + BM25). Our first version is deterministic and
 //! state-aware: keywords + trigger fields are matched against the task,
 //! intent, and goal carried by `ExperienceState`.

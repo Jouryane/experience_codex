@@ -1,12 +1,14 @@
 param(
     [string]$Workspace = "D:\experience_codex\experience-main",
-    [string]$Codex = "C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\8e5b6932251c2c1c\codex.exe"
+    # Resolved from PATH unless given; a machine-specific path is never baked in.
+    [string]$Codex = ""
 )
 # Path A probe: prove headless codex exec can WRITE with a minimal policy
 # (workspace-write sandbox + automatic approvals), under the REAL user
 # profile. Run this from your own terminal, NOT from Experience.
 $ErrorActionPreference = "Continue"
 
+if (-not $Codex) { $Codex = (Get-Command codex.exe -ErrorAction SilentlyContinue).Source }
 if (-not (Test-Path $Codex)) { Write-Host "codex not found: $Codex"; exit 1 }
 if (-not (Test-Path $Workspace)) { Write-Host "workspace not found: $Workspace"; exit 1 }
 

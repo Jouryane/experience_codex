@@ -96,7 +96,7 @@ C43/C44（投影与硬约束）全部原样成立。被纠正的**全部是接�
 
 ### 4.2 已实测：Pull 腿在 **stock Codex** 上端到端跑通（2026-09-17）
 
-宿主：`C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\eab8377aebac6c07\codex.exe`
+宿主：`%LOCALAPPDATA%\OpenAI\Codex\bin\<version-hash>\codex.exe`
 （**官方安装，`codex-cli 0.155.0-alpha.2.6`，不是我们的 fork**）。
 工具面**由 `registry.json` 生成**（2 条经验 → 2 个动态工具），不是手写。
 客户端：`D:\test\_only\experience-segment-mode-20260916\active_leg\explicit_experience.py`。

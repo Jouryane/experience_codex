@@ -3,13 +3,20 @@ param(
     [string]$Proxy = "D:\experience_codex\codex-main\codex-rs\target\debug\codex-responses-api-proxy.exe",
     [string]$ArtifactRoot = "D:\experience_codex\codex-main\m8-complex-artifacts",
     [int]$ProxyPort = 18767,
-    [int]$TimeoutSec = 240
+    [int]$TimeoutSec = 240,
+    # The M8 run copies two real PDFs into its workspace. They are inputs, not
+    # fixtures: pass your own (any two PDFs) so no personal path is baked into
+    # this file.
+    [string]$SourcePdfA = "",
+    [string]$SourcePdfB = ""
 )
 $ErrorActionPreference = "Stop"
 
 $workspace = Join-Path (Resolve-Path ".").Path "m8-complex-workspace"
-$source2407 = "C:\Users\someuser\OneDrive\Desktop\papers-archive\2407.09450v3.pdf"
-$source2603 = "C:\Users\someuser\OneDrive\Desktop\2603.07670v1.pdf"
+if (-not $SourcePdfA -or -not (Test-Path $SourcePdfA)) { throw "pass -SourcePdfA <first PDF> (a real file, used as 2407.09450v3.pdf)" }
+if (-not $SourcePdfB -or -not (Test-Path $SourcePdfB)) { throw "pass -SourcePdfB <second PDF> (a real file, used as 2603.07670v1.pdf)" }
+$source2407 = $SourcePdfA
+$source2603 = $SourcePdfB
 $storeFixture = "fixtures\m8\known-prefix-store.json"
 
 function Read-DeepSeekToken {

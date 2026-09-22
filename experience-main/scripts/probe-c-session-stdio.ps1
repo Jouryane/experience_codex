@@ -1,11 +1,13 @@
 param(
-    [string]$Codex = "C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\8e5b6932251c2c1c\codex.exe"
+    # Resolved from PATH unless given; a machine-specific path is never baked in.
+    [string]$Codex = ""
 )
 # Probe C: wire-level stdio JSON-RPC handshake against the OFFICIAL codex
 # app-server, under the REAL user profile. Run in your own terminal.
 # Sends initialize -> initialized -> server/diagnostics and prints replies.
 $ErrorActionPreference = "Stop"
 
+if (-not $Codex) { $Codex = (Get-Command codex.exe -ErrorAction SilentlyContinue).Source }
 if (-not (Test-Path $Codex)) { Write-Host "codex not found: $Codex"; exit 1 }
 
 $logDir = Join-Path $env:TEMP "exp-probe-c"

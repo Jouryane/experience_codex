@@ -1,4 +1,5 @@
-//! Experience launcher — a thin, stable exe (prior-art-style launch logic only).
+//! Experience launcher — a thin, stable exe (reference-implementation launch
+//! logic only).
 //!
 //! It locates `experience-server` next to itself (or via
 //! EXPERIENCE_SERVER), reserves a free localhost port, spawns the server,
@@ -37,7 +38,8 @@ fn main() {
     let port_file = home.join(".port");
 
     // Single instance: a previous launcher left a port file; if a server is
-    // still answering there, just surface it (prior-art-style open and exit).
+    // still answering there, just surface it (open and exit, as the reference
+    // implementation does).
     if let Ok(existing) = std::fs::read_to_string(&port_file) {
         if let Ok(port) = existing.trim().parse::<u16>() {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {

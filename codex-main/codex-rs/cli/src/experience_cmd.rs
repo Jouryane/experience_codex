@@ -40,6 +40,20 @@ pub enum ExperienceSubcommand {
     /// Diagnose the store plane: resolved path, on-disk format, contents and
     /// any divergence between the execution and management views.
     Doctor,
+    /// Write a read-only HTML report of the store (experiences, templates,
+    /// confidence, execution records, full detail) and print where it went.
+    Html {
+        /// Store to read; defaults to the same resolution the agent uses.
+        #[arg(long)]
+        store: Option<std::path::PathBuf>,
+        /// Where to write the report; defaults to `experience-view.html` next
+        /// to the store.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Open the report in the default browser.
+        #[arg(long)]
+        open: bool,
+    },
     /// Run a stdio MCP server exposing experience tools (list / pin /
     /// unpin / disable). External agents / UIs can access the experience
     /// store through MCP; the agent itself still uses the native runtime.
@@ -126,9 +140,53 @@ pub fn run(subcommand: ExperienceSubcommand) -> Result<()> {
                 }
             }
         }
+        ExperienceSubcommand::Html { store, out, open } => {
+            let store_path = match store {
+                Some(path) => path,
+                None => {
+                    let codex_home = codex_core::config::find_codex_home()?;
+                    codex_core::experience_paths::resolve_store_path(codex_home.as_path())
+                }
+            };
+            let html = codex_core::experience_report::render_html(&store_path)?;
+            let target = match out {
+                Some(path) => path,
+                None => store_path
+                    .parent()
+                    .map(|parent| parent.join("experience-view.html"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("experience-view.html")),
+            };
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, html)?;
+            println!("experience report: {}", target.display());
+            if open {
+                open_in_browser(&target)?;
+            }
+            Ok(())
+        }
         ExperienceSubcommand::Mcp => run_mcp_stdio(),
         ExperienceSubcommand::Ui { port } => crate::experience_ui::run_ui(port.unwrap_or(8765)),
     }
+}
+
+/// Hand the file to the OS. The report is a plain file on disk, so this is the
+/// only integration step needed — no server, no port, no app-server.
+fn open_in_browser(path: &std::path::Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(path);
+    command.spawn()?;
+    Ok(())
 }
 
 fn tools_list() -> Value {

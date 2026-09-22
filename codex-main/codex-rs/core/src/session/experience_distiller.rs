@@ -590,7 +590,7 @@ mod tests {
             \"trigger\": {\"location\": \"desktop\", \"keywords\": [\"png\", \"桌面\", \"移动\"]}, \
             \"workflow\": [{\"name\": \"exec_command\", \"args\": {\"cmd\": \"Move-Item *.png pic\\\\\"}}], \
             \"completion_criteria\": \"桌面 PNG 已清空且 pic 目录数量匹配\", \
-            \"failure_modes\": [\"OneDrive 路径不存在时需先探测\"], \
+            \"failure_modes\": [\"目标路径不存在时需先探测\"], \
             \"assets\": {\"read.mjs\": \"console.log('ok')\"}, \
             \"risk\": \"low\"}\n```";
         let parsed = parse_distilled_experience(text, &candidate()).expect("parsed");

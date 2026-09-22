@@ -8,7 +8,7 @@
 > 会话页真实委派 executor；`scripts/build-app.ps1` 产出
 > `dist/Experience/`（Experience.exe + experience-server.exe + ui/）。
 
-## 1. 形态（prior-art 仅参考其启动逻辑）
+## 1. 形态（启动逻辑仅作参考）
 
 ```text
 experience.exe（薄启动器，一次打包不再动）

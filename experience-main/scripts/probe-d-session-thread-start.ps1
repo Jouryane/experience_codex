@@ -1,5 +1,6 @@
 param(
-    [string]$Codex = "C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\8e5b6932251c2c1c\codex.exe",
+    # Resolved from PATH unless given; a machine-specific path is never baked in.
+    [string]$Codex = "",
     [string]$Workspace = "D:\experience_codex\experience-main"
 )
 # Probe D: create a real codex thread over stdio app-server (JSON-RPC).
@@ -8,6 +9,7 @@ param(
 # response (thread id etc.).
 $ErrorActionPreference = "Stop"
 
+if (-not $Codex) { $Codex = (Get-Command codex.exe -ErrorAction SilentlyContinue).Source }
 if (-not (Test-Path $Codex)) { Write-Host "codex not found: $Codex"; exit 1 }
 
 $logDir = Join-Path $env:TEMP "exp-probe-d"

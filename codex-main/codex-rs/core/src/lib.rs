@@ -67,6 +67,7 @@ mod exec_policy;
 mod experience;
 pub mod experience_management;
 pub mod experience_paths;
+pub mod experience_report;
 mod experience_p1_gate;
 #[cfg(test)]
 mod git_info_tests;

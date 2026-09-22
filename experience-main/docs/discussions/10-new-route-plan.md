@@ -28,7 +28,7 @@ upstream remote       : 已配置（partial clone, blob:none）
 ### 1.2 Pull 腿根本不需要 fork —— 这是要证明的核心命题
 
 ```
-PATH 上的 codex : C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\eab8377aebac6c07\codex.exe
+PATH 上的 codex : %LOCALAPPDATA%\OpenAI\Codex\bin\<version-hash>\codex.exe
 ```
 
 **官方 stock 二进制就在 PATH 上。** 而 fork 对 `app-server` 的改动是**纯增量**

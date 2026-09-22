@@ -8,12 +8,13 @@ $ErrorActionPreference = "Continue"
 $env:RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
 
 # w64devkit gcc 16.2.0 (real C compiler)
-$w64Bin = "C:\Users\someuser\.local\w64devkit\w64devkit\bin"
+$profile = $env:USERPROFILE
+$w64Bin = Join-Path $profile ".local\w64devkit\w64devkit\bin"
 
 # Rust GNU toolchain
-$rustBin = "C:\Users\someuser\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin"
-$selfContained = "C:\Users\someuser\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
-$cargoBin = "C:\Users\someuser\.cargo\bin"
+$rustBin = Join-Path $profile ".rustup\toolchains\stable-x86_64-pc-windows-gnu\bin"
+$selfContained = Join-Path $profile ".rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
+$cargoBin = Join-Path $profile ".cargo\bin"
 
 # Set PATH: w64devkit first so gcc/ar/as are found, then cargo, then rustc, then self-contained (linker)
 $env:PATH = "$w64Bin;$cargoBin;$rustBin;$selfContained;$env:PATH"

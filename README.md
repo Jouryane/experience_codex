@@ -17,9 +17,33 @@ history.
 |---|---|
 | `experience-main/` | The Experience itself: canonical runtime (core + controller), the three contracts, the Gate, learning and qualification, the management surface, UI and docs |
 | `codex-main/` | The Codex fork that hosts it: two execution seams, the world-state seat, the management CLI |
+| `tooling/` | Workspace scripts: launchers (desktop UI / terminal), the HTML viewer, fork-home setup, runtime readiness, privacy audit |
 
 The two directories must stay siblings: `codex-main/codex-rs/core/Cargo.toml`
 references `../../../experience-main/crates/...` as a path dependency.
+
+## Two independent applications, one build
+
+The rebuilt Codex runs **next to** the installed Codex app, sharing nothing.
+The desktop app resolves its backend in this order (`app.asar`,
+`hostConfig.codex_cli_command` → `CODEX_CLI_PATH` → its bundled codex), so the
+official UI can drive the fork:
+
+```powershell
+# tooling/setup-fork-home.ps1      create the fork's own CODEX_HOME
+#                                    (%USERPROFILE%\\.codex-experience) from your
+#                                    real config: model/provider/token only,
+#                                    no notify hook, no plugin paths
+# tooling/prepare-fork-runtime.ps1 build the Windows helpers the app looks for
+#                                    next to the CLI it runs
+# tooling/start-codex-ui.ps1       original desktop UI + fork backend + fork home
+# tooling/start-experience-codex.ps1  the fork's own terminal UI
+# tooling/view-experience.cmd      write + open the read-only HTML report
+```
+
+`tooling/audit-privacy.ps1` re-runs the check that this repository contains no
+personal paths, account names or secrets (the only matches it reports are the
+deliberately fake tokens inside the redaction test corpus).
 
 ## What the control relationship actually is
 
@@ -92,6 +116,14 @@ the format, the contents and any drift.
   single truth and where experience comes from)
 - `experience-main/docs/discussions/` — the immutable experiment ledger
 - `codex-main/docs/architecture/` — the Codex-side acceptance records (m6–m10)
+
+## Privacy
+
+Everything published here is checked by `tooling/audit-privacy.ps1`: no personal
+paths, no account names, no prior-project references, no tokens. Machine-specific
+paths in the acceptance scripts are parameters (`-Desktop`, `-SourcePdfA`,
+`-TargetFolder`) or derived at runtime from `$env:USERPROFILE` / `Get-AppxPackage`.
+The M7 record and its fixture use `papers-archive/` as the anonymised folder name.
 
 ## How this repository is produced
 

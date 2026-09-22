@@ -330,11 +330,13 @@ pub(crate) async fn run_turn(
     // dispatch Gate also answers the pre-LLM full-task / known-prefix
     // question. The legacy embedded chain remains available only when this
     // switch is absent, so the two runtimes never both own a canonical turn.
-    let canonical_task_gate = std::env::var_os("EXPERIENCE_GATE_STORE").is_some()
-        || std::env::var_os("EXPERIENCE_TASK_GATE").is_some();
+    // The store decides, not an env var: an explicit override or an existing
+    // default store at <codex_home>/experience/store.json both enable the seat.
+    let canonical_task_gate = crate::experience_p1_gate::store_configured();
     // V2 world-state seat: opt-in, and independent of the task gate because it
     // may fire on a turn whose request says nothing about the known prefix.
-    let canonical_state_gate = std::env::var_os("EXPERIENCE_STATE_GATE").is_some();
+    let canonical_state_gate =
+        canonical_task_gate && crate::experience_p1_gate::state_seat_enabled();
     let mut canonical_state_gate_done = false;
     let legacy_outer =
         !canonical_task_gate && std::env::var_os("EXPERIENCE_LEGACY_OUTER").is_some();

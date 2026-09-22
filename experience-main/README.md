@@ -63,7 +63,7 @@ experience-main/
     agent-runtime/          # AgentRuntime trait（run -> RunReport）
     agent-codex/            # CodexExecAdapter（唯一 codex exec 包装 + 能力声明）
   apps/
-    experience-launcher/ # 薄启动器 exe（一次打包；prior-art 式启动逻辑）
+    experience-launcher/ # 薄启动器 exe（一次打包；沿用参考实现的启动逻辑）
     experience-server/   # 本地 API 进程（磁盘代码，随改随编）
   ui/www/                # 前端静态页（刷新即生效，无需打包）
 ```

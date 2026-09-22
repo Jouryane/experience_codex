@@ -1,7 +1,9 @@
 param(
-    [string]$RepoDir = "D:\experience_codex\experience-main",
-    [string]$Owner = "<owner>",
-    [string]$Repo = "experience_codex",
+    # Defaults are derived, never baked in: the repository to push is whatever
+    # the local worktree's origin points at.
+    [string]$RepoDir = (Split-Path -Parent $PSScriptRoot),
+    [string]$Owner = "",
+    [string]$Repo = "",
     [string]$Branch = "main",
     [string]$Message = "sync: Experience project",
     [string]$Description = "",
@@ -11,6 +13,17 @@ param(
 # (github.com:443) is unreachable but api.github.com works. Creates blobs,
 # a tree, a commit and the branch ref; optionally updates description/topics.
 $ErrorActionPreference = "Stop"
+
+if (-not $Owner -or -not $Repo) {
+    $origin = (& git -C $RepoDir remote get-url origin) 2>$null
+    if ($origin -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/\.]+)') {
+        if (-not $Owner) { $Owner = $Matches['owner'] }
+        if (-not $Repo) { $Repo = $Matches['repo'] }
+    }
+    if (-not $Owner -or -not $Repo) {
+        throw "pass -Owner and -Repo (no usable origin remote in $RepoDir)"
+    }
+}
 
 $cred = ("protocol=https`nhost=github.com`n`n" | git credential fill) 2>$null
 $token = ($cred | Where-Object { $_ -like 'password=*' } | Select-Object -First 1) -replace '^password=', ''

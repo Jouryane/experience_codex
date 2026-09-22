@@ -1,13 +1,19 @@
 param(
     [string]$RunName = "warm1",
     [string]$Codex = "D:\experience_codex\codex-main\codex-rs\target\debug\codex.exe",
-    [string]$Desktop = "C:\Users\someuser\OneDrive\Desktop",
+    # This is a real-machine test: a PDF sitting in $Desktop is moved into
+    # $Desktop\$TargetFolder. Both are parameters, so no machine-specific path
+    # is baked into this file. Put any PDF named 2407.09450v3.pdf on the
+    # Desktop, or pass -Desktop/-TargetFolder.
+    [string]$Desktop = [Environment]::GetFolderPath('Desktop'),
+    [string]$TargetFolder = "papers-archive",
     [string]$ArtifactRoot = "D:\experience_codex\codex-main\m7-live-artifacts",
     [int]$FakeProviderPort = 18766
 )
 $ErrorActionPreference = "Stop"
 
-$targetDir = Join-Path $Desktop "papers-archive"
+$targetDir = Join-Path $Desktop $TargetFolder
+$desktopKey = $Desktop.ToLowerInvariant().Replace('\', '\\')
 $storeDir = Join-Path $ArtifactRoot "store"
 $store = Join-Path $storeDir "store.json"
 $fakeLog = Join-Path $ArtifactRoot "$RunName-provider.jsonl"
@@ -53,7 +59,7 @@ try {
         'env_key = "M7_FAKE_KEY"',
         'requires_openai_auth = false',
         '',
-        "[projects.'c:\Users\someuser\onedrive\desktop']",
+        "[projects.'$desktopKey']",
         'trust_level = "trusted"',
         ''
     ) -join [Environment]::NewLine
@@ -82,7 +88,7 @@ try {
     $psi.Environment["EXPERIENCE_GATE_BACKUP_ROOT"] = $backup
     $psi.Environment["RUST_LOG"] = "info"
     $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.Write("请把桌面论文 2407.09450v3 移动到 papers-archive 文件夹。")
+    $proc.StandardInput.Write("请把桌面论文 2407.09450v3 移动到 $TargetFolder 文件夹。")
     $proc.StandardInput.Close()
     $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
     $stderrTask = $proc.StandardError.ReadToEndAsync()

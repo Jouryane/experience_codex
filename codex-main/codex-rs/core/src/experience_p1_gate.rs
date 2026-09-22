@@ -160,10 +160,89 @@ fn resolved_store_path() -> Option<PathBuf> {
     let codex_home = crate::config::find_codex_home().ok()?;
     let path = crate::experience_paths::resolve_store_path(codex_home.as_path());
     // Without an override the store must actually exist in canonical form;
-    // a legacy envelope is not something the execution plane may adopt.
+    // a legacy envelope is not something the execution plane may adopt. A
+    // missing file is created once, so a fresh install arms itself instead of
+    // silently behaving like stock Codex.
+    ensure_default_store(&path);
     match crate::experience_paths::detect_format(&path) {
         crate::experience_paths::StoreFormat::Canonical => Some(path),
         _ => None,
+    }
+}
+
+/// "Is an execution seat configured?" — asked once per turn by the turn loop.
+///
+/// The turn-level adapter used to require `EXPERIENCE_GATE_STORE` to be set,
+/// which meant the default home store only worked for the dispatch seam. Now an
+/// explicit override still counts, and otherwise the default store counts as
+/// soon as it exists (and it is created on first resolution).
+pub(crate) fn store_configured() -> bool {
+    // Decided once per process, like the cached runtime: the answer cannot
+    // change under a running session, and the turn loop asks every turn.
+    static ARMED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ARMED.get_or_init(|| {
+        if std::env::var_os("EXPERIENCE_GATE_STORE").is_some_and(|value| !value.is_empty()) {
+            return true;
+        }
+        if std::env::var_os("EXPERIENCE_TASK_GATE").is_some() {
+            return true;
+        }
+        resolved_store_path().is_some()
+    })
+}
+
+/// Is the world-state seat allowed to run?
+///
+/// Enabled by default once a store is configured (the seat is inert without an
+/// experience that explicitly declares `trigger.tool = "state"`, and those are
+/// only ever created deliberately). `EXPERIENCE_STATE_GATE=0/false/off/no`
+/// turns it off, matching how `EXPERIENCE_ENABLED` is read elsewhere.
+pub(crate) fn state_seat_enabled() -> bool {
+    match std::env::var("EXPERIENCE_STATE_GATE") {
+        Ok(value) => !matches!(
+            value.trim().to_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
+/// Create the canonical store at the DEFAULT location if it is not there yet.
+///
+/// Without this, "the file does not exist" silently means "every seat is off",
+/// and a freshly installed fork would behave like stock Codex with no hint.
+/// Only the default path is created: an explicit `EXPERIENCE_GATE_STORE`
+/// override pointing at a missing file is a configuration mistake (or a
+/// fixture that has not been written yet) and is left alone to fail loudly.
+fn ensure_default_store(store_path: &PathBuf) -> bool {
+    if std::env::var_os("EXPERIENCE_GATE_STORE").is_some() {
+        return false;
+    }
+    if crate::experience_paths::detect_format(store_path)
+        != crate::experience_paths::StoreFormat::Missing
+    {
+        return false;
+    }
+    let Some(parent) = store_path.parent() else {
+        return false;
+    };
+    if let Err(error) = std::fs::create_dir_all(parent) {
+        tracing::warn!(?error, "cannot create experience store directory");
+        return false;
+    }
+    let envelope = "{\n  \"schema_version\": 1,\n  \"experiences\": [],\n  \"templates\": []\n}\n";
+    match std::fs::write(store_path, envelope) {
+        Ok(()) => {
+            tracing::info!(
+                path = %store_path.display(),
+                "created empty canonical experience store; the execution seats are now armed"
+            );
+            true
+        }
+        Err(error) => {
+            tracing::warn!(?error, "cannot create experience store");
+            false
+        }
     }
 }
 
@@ -338,7 +417,7 @@ pub(crate) struct StateTakeover {
 
 pub(crate) fn try_state_gate() -> Vec<StateTakeover> {
     let mut takeovers = Vec::new();
-    if std::env::var_os("EXPERIENCE_STATE_GATE").is_none() {
+    if !state_seat_enabled() {
         return takeovers;
     }
     let Some(runtime) = runtime() else {

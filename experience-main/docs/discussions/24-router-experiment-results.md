@@ -44,7 +44,7 @@
 ### 配置
 
 - host：stock `codex-cli 0.155.0-alpha.9`
-  （`C:\Users\someuser\AppData\Local\OpenAI\Codex\bin\cdef5aaf3e41ab53\codex.exe`）
+  （`%LOCALAPPDATA%\OpenAI\Codex\bin\<version-hash>\codex.exe`）
 - 隔离 home：`active_leg/router_home`，内含 `config.toml` + `hooks.json`
 - hook 信任：先用 `hooks/list` 读 `currentHash`，再把 `trusted_hash` 写回
   `config.toml`。**未信任时 hook 被发现但不会执行**，这一点单独就有产品含义。
